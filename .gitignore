@@ -1,0 +1,15 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Downloads folder (Excel files from FMCSA)
+downloads/
+
+# VS Code
+.vscode/
+
+# Playwright browsers (large, no need to commit)
+playwright-browsers/
