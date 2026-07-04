@@ -1,4 +1,4 @@
-const API_BASE = "http://localhost:8000";
+const API_BASE = "https://fmcsa-playwright.onrender.com/";
 
 function setStatus(msg, isError = false) {
   const bar = document.getElementById("statusBar");
