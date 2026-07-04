@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: fmcsa-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: oregon  # US region - solves your IP issue automatically
+    healthCheckPath: /docs
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
