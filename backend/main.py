@@ -193,3 +193,24 @@ async def debug_sms(dot_number: str):
         "links": links[:40],
         "buttons": buttons[:20],
     }
+
+@app.get("/debug-excel/{dot_number}")
+async def debug_excel(dot_number: str):
+    """Shows sheet names and first few rows of the downloaded SMS Excel."""
+    import pandas as pd
+    import os
+
+    file_path = os.path.join(os.path.dirname(__file__), "..", "downloads", f"sms_{dot_number}.xlsx")
+
+    if not os.path.exists(file_path):
+        return {"error": f"No downloaded file found at {file_path}. Run /inspections/{dot_number} first."}
+
+    xl = pd.ExcelFile(file_path, engine="openpyxl")
+    result = {}
+    for sheet in xl.sheet_names:
+        df = xl.parse(sheet, nrows=3)
+        result[sheet] = {
+            "columns": list(df.columns),
+            "sample_rows": df.fillna("").to_dict(orient="records"),
+        }
+    return {"sheets": result}
