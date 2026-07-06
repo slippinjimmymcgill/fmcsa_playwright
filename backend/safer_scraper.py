@@ -99,12 +99,21 @@ def _parse_carrier(soup: BeautifulSoup, dot_number: str) -> dict:
     # -------------------------------------------------- #
     # MC/MX/FF Numbers - the td immediately after "MC/MX/FF Number(s):" label
     # -------------------------------------------------- #
-    mc_label_i = -1
+    mc_number = ""
     for i, t in enumerate(all_tds):
-        if "MC/MX/FF Number" in t and len(t) < 30:  # avoid long disclaimer text
-            mc_label_i = i
-            break
-    mc_number = all_tds[mc_label_i + 1] if mc_label_i != -1 else ""
+        if "MC/MX/FF Number" in t:
+            # The number is either in the same td after a colon, or the next td
+            if ":" in t:
+                after_colon = t.split(":")[-1].strip()
+                if after_colon:
+                    mc_number = after_colon
+                    break
+            # Check next td
+            if i + 1 < len(all_tds):
+                candidate = all_tds[i + 1].strip()
+                if candidate and "Please Note" not in candidate and "click here" not in candidate:
+                    mc_number = candidate
+                    break
 
     # -------------------------------------------------- #
     # COMPANY INFORMATION section
@@ -129,12 +138,17 @@ def _parse_carrier(soup: BeautifulSoup, dot_number: str) -> dict:
         drivers = all_tds[co_i + 9] if co_i != -1 and co_i + 9 < len(all_tds) else ""
     
     # -------------------------------------------------- #
-    # Safety Rating - find "Rating:" label in flat tds
+    # Safety Rating - comes after "Carrier Safety Rating:" section
+    # Look for the td after "Rating:" which may contain "None" or a real rating
     # -------------------------------------------------- #
     safety_rating = ""
     for i, t in enumerate(all_tds):
-        if t == "Rating:":
+        if t.strip() == "Rating:":
             safety_rating = all_tds[i + 1] if i + 1 < len(all_tds) else ""
+            break
+        # Also catch combined cell like "Rating:None" or "Rating:Satisfactory"
+        if t.startswith("Rating:") and len(t) < 40:
+            safety_rating = t.split("Rating:")[-1].strip()
             break
     
     if not legal_name:
