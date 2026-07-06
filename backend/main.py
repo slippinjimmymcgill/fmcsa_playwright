@@ -92,3 +92,44 @@ async def debug_html(dot_number: str):
     # Return all <td> text so we can see the real labels and structure
     tds = [td.get_text(strip=True) for td in soup.find_all("td") if td.get_text(strip=True)]
     return {"url": url, "td_count": len(tds), "all_tds": tds}
+
+@app.get("/debug2/{dot_number}")
+async def debug_fields(dot_number: str):
+    """Shows td index positions for MC and Rating labels specifically."""
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+
+    url = (
+        f"https://safer.fmcsa.dot.gov/query.asp"
+        f"?searchtype=ANY&query_type=queryCarrierSnapshot"
+        f"&query_param=USDOT&query_string={dot_number}"
+    )
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
+        )
+        page = await context.new_page()
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        html = await page.content()
+        await browser.close()
+
+    soup = BeautifulSoup(html, "html.parser")
+    all_tds = [" ".join(td.get_text(separator=" ").split()).strip() 
+               for td in soup.find_all("td")]
+
+    # Find every td that mentions MC or Rating, show it with its neighbors
+    results = []
+    for i, t in enumerate(all_tds):
+        if any(kw in t for kw in ["MC/MX", "Rating:", "Rating Date", "MC-"]):
+            results.append({
+                "index": i,
+                "text": t,
+                "next_1": all_tds[i+1] if i+1 < len(all_tds) else None,
+                "next_2": all_tds[i+2] if i+2 < len(all_tds) else None,
+            })
+
+    return {"matches": results}
