@@ -218,3 +218,27 @@ async def debug_excel(dot_number: str):
             "sample_rows": df.fillna("").to_dict(orient="records"),
         }
     return {"sheets": result}
+
+@app.get("/debug-parse/{dot_number}")
+async def debug_parse(dot_number: str):
+    """Shows raw parsed rows from the Inspections sheet after skiprows=1."""
+    import pandas as pd
+    import os
+
+    file_path = os.path.join(os.path.dirname(__file__), "..", "downloads", f"sms_{dot_number}.xlsx")
+    if not os.path.exists(file_path):
+        return {"error": f"No file found. Run /inspections/{dot_number} first."}
+
+    xl = pd.ExcelFile(file_path, engine="openpyxl")
+
+    # Show what we get with skiprows=1
+    df = pd.read_excel(file_path, sheet_name="Inspections", engine="openpyxl", skiprows=1)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    return {
+        "sheet_names": xl.sheet_names,
+        "row_count": len(df),
+        "columns": list(df.columns),
+        "first_5_rows": df.head(5).fillna("").to_dict(orient="records"),
+        "non_null_counts": df.notna().sum().to_dict(),
+    }
