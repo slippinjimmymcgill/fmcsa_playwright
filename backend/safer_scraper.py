@@ -101,19 +101,11 @@ def _parse_carrier(soup: BeautifulSoup, dot_number: str) -> dict:
     # -------------------------------------------------- #
     mc_number = ""
     for i, t in enumerate(all_tds):
-        if "MC/MX/FF Number" in t:
-            # The number is either in the same td after a colon, or the next td
-            if ":" in t:
-                after_colon = t.split(":")[-1].strip()
-                if after_colon:
-                    mc_number = after_colon
-                    break
-            # Check next td
+        # Match only the short standalone label td, not the long explanatory block
+        if t.strip() == "MC/MX/FF Number(s):" or t.strip() == "MC/MX/FF Number(s)":
             if i + 1 < len(all_tds):
-                candidate = all_tds[i + 1].strip()
-                if candidate and "Please Note" not in candidate and "click here" not in candidate:
-                    mc_number = candidate
-                    break
+                mc_number = all_tds[i + 1].strip()
+            break
 
     # -------------------------------------------------- #
     # COMPANY INFORMATION section
@@ -145,10 +137,6 @@ def _parse_carrier(soup: BeautifulSoup, dot_number: str) -> dict:
     for i, t in enumerate(all_tds):
         if t.strip() == "Rating:":
             safety_rating = all_tds[i + 1] if i + 1 < len(all_tds) else ""
-            break
-        # Also catch combined cell like "Rating:None" or "Rating:Satisfactory"
-        if t.startswith("Rating:") and len(t) < 40:
-            safety_rating = t.split("Rating:")[-1].strip()
             break
     
     if not legal_name:

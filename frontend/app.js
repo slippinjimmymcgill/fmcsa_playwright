@@ -12,7 +12,9 @@ function renderCarrier(carrier) {
   const grid = document.getElementById("companyGrid");
 
   const statusClass = (carrier.usdot_status || "").toLowerCase().includes("active") ? "active" : "inactive";
-  const ratingVal = carrier.safetyRating || "Not Rated";
+  const ratingVal = (carrier.safety_rating && carrier.safety_rating !== "None") 
+  ? carrier.safety_rating 
+  : "Not Rated";
   const ratingClass = ratingVal.toLowerCase(). includes("satisfactory") ? 
   "satisfactory" : 
   ratingVal.toLowerCase().includes("conditional") ? "conditional" : 
