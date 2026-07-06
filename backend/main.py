@@ -63,3 +63,32 @@ async def get_full(dot_number: str):
         "carrier": carrier,
         "inspections": inspections,
     }
+
+@app.get("/debug/{dot_number}")
+async def debug_html(dot_number: str):
+    """Returns raw HTML from SAFER page - remove after debugging."""
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+
+    url = (
+        f"https://safer.fmcsa.dot.gov/query.asp"
+        f"?searchtype=ANY&query_type=queryCarrierSnapshot"
+        f"&query_param=USDOT&query_string={dot_number}"
+    )
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
+        )
+        page = await context.new_page()
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        html = await page.content()
+        await browser.close()
+
+    soup = BeautifulSoup(html, "html.parser")
+    # Return all <td> text so we can see the real labels and structure
+    tds = [td.get_text(strip=True) for td in soup.find_all("td") if td.get_text(strip=True)]
+    return {"url": url, "td_count": len(tds), "all_tds": tds}
