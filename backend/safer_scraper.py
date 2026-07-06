@@ -106,14 +106,13 @@ def _parse_carrier(soup: BeautifulSoup, dot_number: str) -> dict:
     else:
         drivers = all_tds[co_i + 9] if co_i != -1 and co_i + 9 < len(all_tds) else ""
 
-    # Safety Rating — regex on full page text
-    # Matches "Rating: None" or "Rating: Satisfactory" but not "Rating Date:"
-    rating_match  = re.search(r'(?<!Date: )(?<!Review )Rating:\s*(\w+)', full_text)
-    safety_rating = ""
-    if rating_match:
-        val = rating_match.group(1)
-        if val not in ("Date", "Information", "below"):
-            safety_rating = val
+    # Safety Rating: find the value after "Rating:" that appears AFTER "Review Information"
+    # Page text contains: "Rating Date: None Review Date: None Rating: None Type: None"
+    # We want the "Rating:" that comes after "Review Date:", not "The rating below..."
+    rating_match = re.search(
+        r'Review Date:\s*\S+\s+Rating:\s*(\w+)', full_text
+    )
+    safety_rating = rating_match.group(1).strip() if rating_match else ""
 
     if not legal_name:
         raise ValueError(
