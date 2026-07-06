@@ -171,6 +171,21 @@ async def debug_sms(dot_number: str):
         if b.get_text(strip=True) or b.get("value")
     ]
 
+    download_btns = []
+    for btn in soup.find_all("input", {"value": "Download"}):
+        parent = btn.parent
+        grandparent = parent.parent if parent else None
+        download_btns.append({
+            "type": btn.get("type"),
+            "value": btn.get("value"),
+            "parent_tag": parent.name if parent else None,
+            "parent_id": parent.get("id") if parent else None,
+            "parent_style": parent.get("style") if parent else None,
+            "grandparent_tag": grandparent.name if grandparent else None,
+            "grandparent_id": grandparent.get("id") if grandparent else None,
+            "grandparent_style": grandparent.get("style") if grandparent else None,
+        })
+
     return {
         "status": status,
         "url": sms_url,

@@ -86,8 +86,8 @@ def _parse_carrier(soup: BeautifulSoup, dot_number: str) -> dict:
     op_auth_raw    = all_tds[op_auth_i + 1] if op_auth_i != -1 else ""
     op_auth_status = op_auth_raw.split("*Please Note:")[0].strip()
 
-    # MC/MX/FF Number — regex on full page text
-    mc_match  = re.search(r'MC/MX/FF Number\(s\):\s*([\w-]+)', full_text)
+    # MC/MX/FF Number — regex on full page text, must match actual MC/MX/FF number format (letters + digits)
+    mc_match = re.search(r'MC/MX/FF Number\(s\):\s*((?:MC|MX|FF)-?\d+)', full_text)
     mc_number = mc_match.group(1).strip() if mc_match else ""
 
     # COMPANY INFORMATION

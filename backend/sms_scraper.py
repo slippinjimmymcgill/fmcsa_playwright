@@ -1,9 +1,6 @@
 """
 Uses Playwright to navigate directly to the FMCSA SMS carrier overview page
 and click the Download button to get the inspection Excel export.
-
-No new-tab handling needed, the Download button triggers a file download
-directly on the overview page.
 """
 
 import os
@@ -12,12 +9,8 @@ from playwright.async_api import async_playwright
 DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
+
 async def download_sms_inspection_excel(dot_number: str, headless: bool = True) -> str:
-    """
-    Navigates directly to the SMS carrier overview page and clicks the
-    Download button to trigger the Excel export.
-    Returns the local file path of the downloaded file.
-    """
     sms_url = f"https://ai.fmcsa.dot.gov/SMS/Carrier/{dot_number}/overview.aspx"
 
     async with async_playwright() as p:
@@ -32,30 +25,36 @@ async def download_sms_inspection_excel(dot_number: str, headless: bool = True) 
         )
         page = await context.new_page()
 
-        print(f"[Playwright] Navigating to SMS overview page: {sms_url}")
+        print(f"[Playwright] Navigating to SMS overview: {sms_url}")
         await page.goto(sms_url, wait_until="networkidle", timeout=60000)
 
-        # scroll to the Downloads section first
+        # Wait for JS to finish rendering
+        await page.wait_for_timeout(3000)
+
+        # Try clicking the DOWNLOADS anchor to expand/reveal the section
         downloads_anchor = page.locator("a[href='#Downloads']").first
         if await downloads_anchor.count() > 0:
-            await downloads_anchor.scroll_into_view_if_needed()
-            await page.wait_for_timeout(1000)  # wait a moment for any lazy loading
+            print(f"[Playwright] Clicking DOWNLOADS anchor to reveal section...")
+            await downloads_anchor.click()
+            await page.wait_for_timeout(2000)
 
-        # Click the "Download" submit button to trigger the Excel download
+        # Find the Download button
         download_btn = page.locator("input[type='submit'][value='Download']").first
         if await download_btn.count() == 0:
             await browser.close()
             raise RuntimeError(
-                f"No download button found on SMS page for DOT {dot_number}. "
-                f"URL: {sms_url}"
+                f"No Download button found on SMS page for DOT {dot_number}."
             )
-        
-        print(f"[Playwright] Clicking Download button...")
+
+        # Use dispatch_event to click even if element is hidden
+        print(f"[Playwright] Dispatching click on Download button...")
         async with page.expect_download(timeout=60000) as download_info:
-            await download_btn.click()
+            await download_btn.dispatch_event("click")
+
         download = await download_info.value
         file_path = os.path.join(DOWNLOAD_DIR, f"sms_{dot_number}.xlsx")
         await download.save_as(file_path)
         await browser.close()
+
         print(f"[Playwright] Downloaded to: {file_path}")
         return file_path
