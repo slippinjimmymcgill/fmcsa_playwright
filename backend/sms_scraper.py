@@ -28,25 +28,28 @@ async def download_sms_inspection_excel(dot_number: str, headless: bool = True) 
         print(f"[Playwright] Navigating to SMS overview: {sms_url}")
         await page.goto(sms_url, wait_until="networkidle", timeout=60000)
 
-        # Wait for JS to finish rendering
+        # Wait extra for JS rendering
         await page.wait_for_timeout(3000)
 
-        # Try clicking the DOWNLOADS anchor to expand/reveal the section
+        # Click the DOWNLOADS anchor to expand/reveal the section
         downloads_anchor = page.locator("a[href='#Downloads']").first
         if await downloads_anchor.count() > 0:
-            print(f"[Playwright] Clicking DOWNLOADS anchor to reveal section...")
+            print(f"[Playwright] Clicking DOWNLOADS anchor...")
             await downloads_anchor.click()
             await page.wait_for_timeout(2000)
 
-        # Find the Download button
+        # Wait up to 15s for the Download button to appear in DOM
         download_btn = page.locator("input[type='submit'][value='Download']").first
-        if await download_btn.count() == 0:
+        try:
+            await download_btn.wait_for(state="attached", timeout=15000)
+            print(f"[Playwright] Download button found in DOM")
+        except Exception:
             await browser.close()
             raise RuntimeError(
                 f"No Download button found on SMS page for DOT {dot_number}."
             )
 
-        # Use dispatch_event to click even if element is hidden
+        # dispatch_event bypasses visibility — fires click even if hidden
         print(f"[Playwright] Dispatching click on Download button...")
         async with page.expect_download(timeout=60000) as download_info:
             await download_btn.dispatch_event("click")
