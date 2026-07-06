@@ -11,17 +11,31 @@ function renderCarrier(carrier) {
   const card = document.getElementById("companyCard");
   const grid = document.getElementById("companyGrid");
 
+  const statusClass = (carrier.usdot_status || "").toLowerCase().includes("active") ? "active" : "inactive";
+  const ratingVal = carrier.safetyRating || "Not Rated";
+  const ratingClass = ratingVal.toLowerCase(). includes("satisfactory") ? 
+  "satisfactory" : 
+  ratingVal.toLowerCase().includes("conditional") ? "conditional" : 
+  ratingVal.toLowerCase().includes("unsatisfactory") ? "unsatisfactory" : "";
+
   const fields = [
-    { label: "Legal Name", value: carrier.legalName || carrier.legal_name || "—" },
-    { label: "DBA Name", value: carrier.dbaName || carrier.dba_name || "—" },
-    { label: "USDOT Number", value: carrier.dotNumber || carrier.dot_number || "—" },
-    { label: "MC Number", value: carrier.mcNumber || carrier.mc_number || "—" },
-    { label: "Phone", value: carrier.telephone || "—" },
-    { label: "Address", value: carrier.phyStreet ? `${carrier.phyStreet}, ${carrier.phyCity}, ${carrier.phyState} ${carrier.phyZip}` : "—" },
-    { label: "Safety Rating", value: carrier.safetyRating || carrier.safety_rating || "Not Rated", badge: true, badgeClass: (carrier.safetyRating || "").toLowerCase() },
-    { label: "Power Units", value: carrier.totalPowerUnits || carrier.power_units || "—" },
-    { label: "Drivers", value: carrier.totalDrivers || carrier.drivers || "—" },
-    { label: "Carrier Operation", value: carrier.carrierOperation?.carrierOperationDesc || carrier.carrier_operation || "—" },
+    { label: "Legal Name", value: carrier.legal_name || "—" },
+    { label: "DBA Name", value: carrier.dba_name || "—" },
+    { label: "USDOT Number", value: carrier.dot_number || "—" },
+    { label: "MC/MX/FF Number", value: carrier.mc_mx_ff_numbers || "—" },
+    { label: "Entity Type", value: carrier.entity_type || "—" },
+    { label: "USDOT Status", value: carrier.usdot_status || "—", badge: true, badgeClass: statusClass },
+    { label: "Operating Authority", value: carrier.operating_authority_status || "—" },
+    { label: "Out of Service Date", value: carrier.out_of_service_date || "—" },
+    { label: "Phone", value: carrier.phone || "—" },
+    { label: "Physical Address", value: carrier.physical_address || "—" },
+    { label: "Mailing Address", value: carrier.mailing_address || "—" },
+    { label: "Power Units", value: carrier.power_units || "—" },
+    { label: "Drivers", value: carrier.drivers || "—" },
+    { label: "DUNS Number", value: carrier.duns_number || "—" },
+    { label: "MCS-150 Form Date", value: carrier.mcs_150_form_date || "—" },
+    { label: "MCS-150 Mileage (Year)", value: carrier.mcs_150_mileage_year || "—" },
+    { label: "Safety Rating", value: ratingVal, badge: !!ratingClass, badgeClass: ratingClass },
   ];
 
   grid.innerHTML = fields.map(f => `
@@ -87,7 +101,8 @@ async function fetchAll() {
     const data = await res.json();
     renderCarrier(data.carrier);
     renderInspections(data.inspections);
-    setStatus(`✓ Loaded carrier "${data.carrier?.legalName || dot}" with ${data.inspections.length} inspection records.`);
+    const warn = data.warning ? ` (Warning: ${data.warning})` : "";
+    setStatus(`✓ Loaded "${data.carrier?.legalName || dot}" - ${data.inspections.length} inspection record(s)${warn}`);
   } catch (e) {
     setStatus(`Error: ${e.message}`, true);
   } finally {
