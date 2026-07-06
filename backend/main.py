@@ -133,3 +133,48 @@ async def debug_fields(dot_number: str):
             })
 
     return {"matches": results}
+
+@app.get("/debug-sms/{dot_number}")
+async def debug_sms(dot_number: str):
+    """Shows what's on the SMS page for this DOT number."""
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+
+    sms_url = f"https://ai.fmcsa.dot.gov/SMS/Carrier/{dot_number}/overview.aspx"
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            accept_downloads=True,
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
+        )
+        page = await context.new_page()
+        resp = await page.goto(sms_url, wait_until="networkidle", timeout=60000)
+        status = resp.status
+        html = await page.content()
+        await browser.close()
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Collect all links and buttons on the page
+    links = [
+        {"text": a.get_text(strip=True), "href": a.get("href", "")}
+        for a in soup.find_all("a")
+        if a.get_text(strip=True)
+    ]
+    buttons = [
+        {"text": b.get_text(strip=True), "type": b.get("type", ""), "value": b.get("value", "")}
+        for b in soup.find_all(["button", "input"])
+        if b.get_text(strip=True) or b.get("value")
+    ]
+
+    return {
+        "status": status,
+        "url": sms_url,
+        "page_title": soup.title.string if soup.title else "",
+        "links": links[:40],
+        "buttons": buttons[:20],
+    }
