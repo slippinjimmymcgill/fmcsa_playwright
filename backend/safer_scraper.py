@@ -8,7 +8,8 @@ and reading the tds that follow them in order.
 """
 
 from playwright.async_api import async_playwright
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, soup
+import re
 
 SAFER_SNAPSHOT_URL = (
     "https://safer.fmcsa.dot.gov/query.asp"
@@ -16,6 +17,8 @@ SAFER_SNAPSHOT_URL = (
     "&query_param=USDOT&query_string={dot}"
 )
 
+full_text = soup.get_text(separator=" ")
+full_text = " ".join(full_text.split())
 
 def _clean(text: str) -> str:
     return " ".join(text.split()).strip()
@@ -57,7 +60,11 @@ def _parse_carrier(soup: BeautifulSoup, dot_number: str) -> dict:
     drivers
     """
 
-    all_tds = [_clean(td.get_text(separator=" ")) for td in soup.find_all("td")]
+    all_tds = [
+        _clean(td.get_text(separator=" "))
+        for td in soup.find_all("td")
+        if len(_clean(td.get_text(separator=" "))) < 500
+    ]
 
     def idx(label: str) -> int:
         """
@@ -99,13 +106,8 @@ def _parse_carrier(soup: BeautifulSoup, dot_number: str) -> dict:
     # -------------------------------------------------- #
     # MC/MX/FF Numbers - the td immediately after "MC/MX/FF Number(s):" label
     # -------------------------------------------------- #
-    mc_number = ""
-    for i, t in enumerate(all_tds):
-        # Match only the short standalone label td, not the long explanatory block
-        if t.strip() == "MC/MX/FF Number(s):" or t.strip() == "MC/MX/FF Number(s)":
-            if i + 1 < len(all_tds):
-                mc_number = all_tds[i + 1].strip()
-            break
+    mc_match = re.search(r'MC/MX/FF Number\(s\):\s*([\w-]+)', full_text)
+    mc_number = mc_match.group(1).strip() if mc_match else ""
 
     # -------------------------------------------------- #
     # COMPANY INFORMATION section
@@ -133,11 +135,14 @@ def _parse_carrier(soup: BeautifulSoup, dot_number: str) -> dict:
     # Safety Rating - comes after "Carrier Safety Rating:" section
     # Look for the td after "Rating:" which may contain "None" or a real rating
     # -------------------------------------------------- #
+    rating_match = re.search(r'(?<!Date: )(?<!Review )Rating:\s*(\w+)', full_text)
     safety_rating = ""
-    for i, t in enumerate(all_tds):
-        if t.strip() == "Rating:":
-            safety_rating = all_tds[i + 1] if i + 1 < len(all_tds) else ""
-            break
+    if rating_match:
+        val = rating_match.group(1)
+        if val not in ("None", "Date", "Information", "below"):
+            safety_rating = val
+        else:
+            safety_rating = val if val == "None" else ""
     
     if not legal_name:
         raise ValueError(
