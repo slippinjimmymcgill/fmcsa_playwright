@@ -3,9 +3,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from safer_scraper import get_carrier_by_dot
 from sms_scraper import download_sms_inspection_excel
-from excel_parser import parse_inspections
+from excel_parser import parse_inspections, parse_crashes
 
-app = FastAPI(title="FMCSA Tool API (No API Key Required)")
+app = FastAPI(title="FMCSA Tool API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,7 +33,8 @@ async def get_inspections(dot_number: str):
     try:
         file_path = await download_sms_inspection_excel(dot_number)
         inspections = parse_inspections(file_path)
-        return {"status": "ok", "dot_number": dot_number, "inspections": inspections}
+        crashes = parse_crashes(file_path)
+        return {"status": "ok", "dot_number": dot_number, "inspections": inspections, "crashes": crashes}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -49,12 +50,14 @@ async def get_full(dot_number: str):
     try:
         excel_path = await download_sms_inspection_excel(dot_number)
         inspections = parse_inspections(excel_path)
+        crashes = parse_crashes(excel_path)
     except Exception as e:
         # Carrier details still useful even if SMS download fails
         return {
             "status": "partial",
             "carrier": carrier,
             "inspections": [],
+            "crashes": [],
             "warning": f"Carrier details fetched, but SMS inspection download failed: {e}",
         }
 
@@ -62,6 +65,7 @@ async def get_full(dot_number: str):
         "status": "ok",
         "carrier": carrier,
         "inspections": inspections,
+        "crashes": crashes,
     }
 
 @app.get("/debug/{dot_number}")
@@ -196,7 +200,7 @@ async def debug_sms(dot_number: str):
 
 @app.get("/debug-excel/{dot_number}")
 async def debug_excel(dot_number: str):
-    """Shows sheet names and first few rows of the downloaded SMS Excel."""
+    """Shows sheet names and columns of the downloaded SMS Excel."""
     import pandas as pd
     import os
 
