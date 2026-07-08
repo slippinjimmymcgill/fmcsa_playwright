@@ -1,18 +1,18 @@
 const API_BASE = "https://fmcsa-playwright.onrender.com";
 
-// US state positions on the SVG viewBox (x, y) mapped from lat/lng
+// State label positions matching the new SVG paths (cx, cy of each state)
 const STATE_SVG = {
-  AL:[670,380],AK:[130,480],AZ:[195,360],AR:[600,360],CA:[105,310],
-  CO:[300,290],CT:[810,195],DE:[790,225],FL:[700,440],GA:[680,380],
-  HI:[230,520],ID:[185,210],IL:[620,270],IN:[655,265],IA:[565,235],
-  KS:[480,305],KY:[665,305],LA:[590,415],ME:[850,145],MD:[785,245],
-  MA:[830,185],MI:[650,210],MN:[545,175],MS:[620,385],MO:[580,305],
-  MT:[255,165],NE:[455,260],NV:[160,275],NH:[825,170],NJ:[800,225],
-  NM:[280,360],NY:[780,195],NC:[730,330],ND:[450,165],OH:[695,255],
-  OK:[490,355],OR:[130,200],PA:[760,230],RI:[830,195],SC:[715,360],
-  SD:[450,215],TN:[655,340],TX:[450,415],UT:[220,290],VT:[815,165],
-  VA:[750,285],WA:[145,155],WV:[730,270],WI:[610,200],WY:[285,225],
-  DC:[785,255],
+  WA:[130,100], OR:[90,175], CA:[95,320], NV:[170,240], ID:[210,165],
+  MT:[270,80],  WY:[295,175],UT:[210,265],CO:[295,245],AZ:[195,360],
+  NM:[295,330], ND:[405,85], SD:[405,155],NE:[405,240],KS:[405,300],
+  OK:[420,350], TX:[430,430],MN:[510,140],IA:[510,238],MO:[520,300],
+  AR:[535,348], LA:[540,415],WI:[580,185],IL:[595,265],MS:[560,385],
+  MI:[625,175], IN:[630,228],OH:[660,225],KY:[655,280],TN:[660,318],
+  AL:[648,368], GA:[705,368],FL:[680,455],SC:[738,322],NC:[740,283],
+  VA:[725,268], WV:[688,272],PA:[760,235],NY:[785,195],VT:[815,170],
+  NH:[835,153], ME:[848,140],MA:[832,203],RI:[852,204],CT:[828,218],
+  NJ:[788,238], DE:[793,260],MD:[778,258],DC:[782,261],
+  AK:[150,525], HI:[300,550],
 };
 
 let currentMapData = [];
@@ -155,9 +155,7 @@ function renderAuthority(authority) {
 function renderMap(mapData) {
   currentMapData = mapData;
   const svg = document.getElementById("usMap");
-  // Clear existing dots but keep state paths
   svg.querySelectorAll(".map-dot, .map-label").forEach(e => e.remove());
-
   if (!mapData || !mapData.length) return;
 
   const maxCount = Math.max(...mapData.map(d => d.count), 1);
@@ -166,8 +164,8 @@ function renderMap(mapData) {
   mapData.forEach(d => {
     const pos = STATE_SVG[d.state];
     if (!pos) return;
-    const r = 8 + (d.count / maxCount) * 28;
-    const oosRatio = d.oos_count / d.count;
+    const r = 10 + (d.count / maxCount) * 30;
+    const oosRatio = d.oos_count / Math.max(d.count, 1);
     const color = oosRatio > 0.5 ? "#c0392b" : oosRatio > 0.2 ? "#e67e22" : "#2980b9";
 
     const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
@@ -175,21 +173,18 @@ function renderMap(mapData) {
     circle.setAttribute("cy", pos[1]);
     circle.setAttribute("r", r);
     circle.setAttribute("fill", color);
-    circle.setAttribute("opacity", "0.75");
+    circle.setAttribute("opacity", "0.82");
     circle.setAttribute("class", "map-dot");
     circle.style.cursor = "pointer";
-
-    circle.addEventListener("mousemove", (e) => {
+    circle.addEventListener("mousemove", e => {
       tooltip.style.display = "block";
-      tooltip.style.left = (e.clientX + 12) + "px";
+      tooltip.style.left = (e.clientX + 14) + "px";
       tooltip.style.top = (e.clientY - 10) + "px";
-      tooltip.innerHTML = `<b>${d.state}</b><br>${d.count} inspection(s)<br>${d.oos_count} OOS`;
+      tooltip.innerHTML = `<b>${d.state}</b><br>${d.count} inspection(s)<br>${d.oos_count} OOS (${Math.round(oosRatio*100)}%)`;
     });
     circle.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
-
     svg.appendChild(circle);
 
-    // State label
     const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
     text.setAttribute("x", pos[0]);
     text.setAttribute("y", pos[1] + 4);
