@@ -641,3 +641,77 @@ async def debug_li6(dot_number: str):
 
     except Exception as e:
         return {"error": str(e), "traceback": traceback.format_exc()}
+
+@app.get("/debug-motus/{dot_number}")
+async def debug_motus(dot_number: str):
+    """Explore MOTUS sub-pages for insurance and authority history."""
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+    import traceback
+
+    base_url = f"https://motus.dot.gov/customer/{dot_number}"
+    sub_pages = [
+        f"{base_url}/account",
+        f"{base_url}/insurance",
+        f"{base_url}/insurance-history",
+        f"{base_url}/authority",
+        f"{base_url}/authority-history",
+        f"{base_url}/operating-authority",
+    ]
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+            )
+            page = await context.new_page()
+
+            # First load the account page and wait for React to render
+            await page.goto(f"{base_url}/account", wait_until="networkidle", timeout=60000)
+            await page.wait_for_timeout(5000)
+
+            # Get all navigation links visible after JS renders
+            html = await page.content()
+            soup = BeautifulSoup(html, "html.parser")
+            all_links = [
+                {"text": a.get_text(strip=True), "href": a.get("href", "")}
+                for a in soup.find_all("a") if a.get_text(strip=True)
+            ]
+            full_text = soup.get_text()[:3000]
+
+            # Try each sub-page URL
+            results = {}
+            for url in sub_pages:
+                try:
+                    resp = await page.goto(url, wait_until="networkidle", timeout=30000)
+                    await page.wait_for_timeout(3000)
+                    sub_html = await page.content()
+                    sub_soup = BeautifulSoup(sub_html, "html.parser")
+                    sub_text = sub_soup.get_text()
+                    results[url] = {
+                        "status": resp.status,
+                        "final_url": page.url,
+                        "text_length": len(sub_text),
+                        "text_snippet": sub_text[:1000],
+                        "links": [
+                            {"text": a.get_text(strip=True), "href": a.get("href", "")}
+                            for a in sub_soup.find_all("a") if a.get_text(strip=True)
+                        ][:20],
+                    }
+                except Exception as e:
+                    results[url] = {"error": str(e)}
+
+            await browser.close()
+            return {
+                "account_links": all_links,
+                "account_text": full_text,
+                "sub_pages": results,
+            }
+
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
