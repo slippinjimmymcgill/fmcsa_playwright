@@ -150,3 +150,35 @@ async def get_full(dot_number: str):
         "authority_history": authority_history,
         "warnings": warnings,
     }
+
+@app.get("/debug-socrata/{dot_number}")
+async def debug_socrata(dot_number: str):
+    """Test all Socrata dataset IDs and show raw field names returned."""
+    import httpx
+    padded = dot_number.zfill(8)
+
+    datasets = {
+        "InsHist_daily_xkmg-ff2t": f"https://data.transportation.gov/resource/xkmg-ff2t.json?$where=dot_number='{padded}'&$limit=3",
+        "InsHist_allhist_xkn3-5fci": f"https://data.transportation.gov/resource/xkn3-5fci.json?$where=dot_number='{padded}'&$limit=3",
+        "InsHist_unpadded_xkmg": f"https://data.transportation.gov/resource/xkmg-ff2t.json?$where=dot_number='{dot_number}'&$limit=3",
+        "AuthHist_9mw4": f"https://data.transportation.gov/resource/9mw4-x3tu.json?$where=dot_number='{padded}'&$limit=3",
+        "MotusInsHist_rqg5": f"https://data.transportation.gov/resource/rqg5-mte8.json?$where=usdot_number='{dot_number}'&$limit=3",
+        "MotusAuthHist_a37f": f"https://data.transportation.gov/resource/a37f-s6p3.json?$where=usdot_number='{dot_number}'&$limit=3",
+    }
+
+    results = {}
+    async with httpx.AsyncClient(timeout=15) as client:
+        for name, url in datasets.items():
+            try:
+                resp = await client.get(url)
+                data = resp.json()
+                results[name] = {
+                    "status": resp.status_code,
+                    "count": len(data) if isinstance(data, list) else 0,
+                    "fields": list(data[0].keys()) if isinstance(data, list) and data else [],
+                    "sample": data[0] if isinstance(data, list) and data else data,
+                }
+            except Exception as e:
+                results[name] = {"error": str(e)}
+
+    return {"padded_dot": padded, "results": results}
