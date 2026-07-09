@@ -310,9 +310,7 @@ async function fetchAll() {
   } finally {
     btn.disabled = false;
     btn.innerHTML = `<i class="fas fa-search"></i> Search`;
-
     initMap();
-    renderInsurance(data.insurance_history || []);
   }
 }
 
