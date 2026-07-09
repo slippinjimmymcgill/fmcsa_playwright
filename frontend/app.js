@@ -125,9 +125,15 @@ function renderCrashes(crashes) {
   </tr>`).join("");
 }
 
-function renderInsurance(insurance) {
+function renderInsurance(insurance, unavailableMsg) {
   document.getElementById("insTabCount").textContent = insurance.length;
   const tbody = document.getElementById("insBody");
+  if (unavailableMsg && !insurance.length) {
+    tbody.innerHTML = `<tr><td colspan="7" style="padding:20px;color:#777;font-size:0.88rem">
+      <i class="fas fa-lock" style="margin-right:6px;color:#e67e22"></i>${unavailableMsg}
+    </td></tr>`;
+    return;
+  }
   if (!insurance.length) {
     tbody.innerHTML = `<tr><td colspan="7" class="empty-msg">No insurance history found.</td></tr>`;
     return;
@@ -312,6 +318,7 @@ async function fetchAll() {
     btn.innerHTML = `<i class="fas fa-search"></i> Search`;
 
     initMap();
+    renderInsurance(data.insurance_history || [], data.insurance_unavailable || "");
   }
 }
 

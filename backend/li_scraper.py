@@ -1,75 +1,27 @@
 """
-Scrapes Insurance History and Authority History from FMCSA L&I site.
+Fetches carrier authority and insurance data from MOTUS (motus.dot.gov),
+which replaced the old li-public.fmcsa.dot.gov site.
 
-The search form is protected by reCAPTCHA so we bypass it entirely
-by navigating directly to the carrier detail URL using the DOT number.
-Direct URL pattern (no CAPTCHA, no form):
-https://li-public.fmcsa.dot.gov/LIVIEW/pkg_carrquery.prc_getcarrinfo?pv_vpath=LIVIEW&pn_dotno={DOT}
+Public access (no login required):
+- /customer/{dot}/account  → basic info + operating authority links
+
+Login.gov required (not publicly accessible):
+- Insurance history
+- Full authority history
+
+We scrape what's available publicly and return clear unavailability
+messages for gated data.
 """
 
 from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 
-LI_BASE = "https://li-public.fmcsa.dot.gov"
-LI_CARRIER_URL = (
-    "https://li-public.fmcsa.dot.gov/LIVIEW/pkg_carrquery.prc_getcarrinfo"
-    "?pv_vpath=LIVIEW&pn_dotno={dot}"
-)
-
-
-def _parse_all_tables(soup: BeautifulSoup) -> list[dict]:
-    """Parse every table on the page into a list of records, tagged with table index."""
-    results = []
-    for i, table in enumerate(soup.find_all("table")):
-        rows = table.find_all("tr")
-        if len(rows) < 2:
-            continue
-        headers = [th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])]
-        headers = [h for h in headers if h]
-        if not headers:
-            continue
-        records = []
-        for row in rows[1:]:
-            cells = [td.get_text(strip=True) for td in row.find_all("td")]
-            if not any(cells):
-                continue
-            while len(cells) < len(headers):
-                cells.append("")
-            records.append(dict(zip(headers, cells[:len(headers)])))
-        if records:
-            results.append({"table_index": i, "headers": headers, "records": records})
-    return results
-
-
-def _find_table_by_heading(soup: BeautifulSoup, keyword: str) -> list[dict]:
-    """Find the table that follows a heading containing keyword."""
-    for tag in soup.find_all(["h1","h2","h3","h4","h5","b","strong","font","td","th"]):
-        text = tag.get_text(strip=True).lower()
-        if keyword.lower() in text and len(text) < 100:
-            table = tag.find_next("table")
-            if table:
-                rows = table.find_all("tr")
-                if len(rows) < 2:
-                    continue
-                headers = [th.get_text(strip=True) for th in rows[0].find_all(["th","td"])]
-                headers = [h for h in headers if h]
-                if not headers:
-                    continue
-                records = []
-                for row in rows[1:]:
-                    cells = [td.get_text(strip=True) for td in row.find_all("td")]
-                    if not any(cells):
-                        continue
-                    while len(cells) < len(headers):
-                        cells.append("")
-                    records.append(dict(zip(headers, cells[:len(headers)])))
-                if records:
-                    return records
-    return []
+MOTUS_ACCOUNT_URL = "https://motus.dot.gov/customer/{dot}/account"
+MOTUS_BASE = "https://motus.dot.gov"
 
 
 async def get_li_data(dot_number: str) -> dict:
-    url = LI_CARRIER_URL.format(dot=dot_number)
+    account_url = MOTUS_ACCOUNT_URL.format(dot=dot_number)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -82,93 +34,71 @@ async def get_li_data(dot_number: str) -> dict:
         )
         page = await context.new_page()
 
-        print(f"[LI] Direct carrier URL: {url}")
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(2000)
+        print(f"[MOTUS] Loading account page: {account_url}")
+        await page.goto(account_url, wait_until="networkidle", timeout=60000)
+        await page.wait_for_timeout(4000)
 
-        carrier_html = await page.content()
-        carrier_soup = BeautifulSoup(carrier_html, "html.parser")
-        carrier_text = carrier_soup.get_text().lower()
+        html = await page.content()
+        soup = BeautifulSoup(html, "html.parser")
+        page_text = soup.get_text()
 
-        # Check if we got a real carrier page or an error/redirect
-        if "no carrier" in carrier_text or "not found" in carrier_text or len(carrier_html) < 1000:
-            await browser.close()
-            return {"insurance_history": [], "authority_history": []}
+        # Extract operating authority links (these are clickable without login)
+        authority_links = []
+        for a in soup.find_all("a"):
+            href = a.get("href", "")
+            text = a.get_text(strip=True)
+            if "operating-authority-detail" in href:
+                authority_links.append({
+                    "text": text,
+                    "url": MOTUS_BASE + href if href.startswith("/") else href
+                })
 
-        # Find all links on carrier detail page
-        all_links = [(a.get_text(strip=True), a.get("href",""))
-                     for a in carrier_soup.find_all("a") if a.get_text(strip=True)]
-        print(f"[LI] Carrier page links: {[l[0] for l in all_links[:20]]}")
-
-        insurance_history = []
+        # Scrape operating authority detail pages
         authority_history = []
+        for auth_link in authority_links[:5]:  # limit to 5
+            try:
+                await page.goto(auth_link["url"], wait_until="networkidle", timeout=30000)
+                await page.wait_for_timeout(3000)
+                detail_html = await page.content()
+                detail_soup = BeautifulSoup(detail_html, "html.parser")
+                detail_text = detail_soup.get_text()
 
-        # Look for Insurance History link
-        ins_href = None
-        auth_href = None
-        for text, href in all_links:
-            if "insurance" in text.lower() and "history" in text.lower():
-                ins_href = href
-            if "authority" in text.lower() and "history" in text.lower():
-                auth_href = href
+                # Extract key fields from the detail page text
+                record = {"authority": auth_link["text"], "docket": "", "served": "", "decided": "", "action": ""}
 
-        if ins_href:
-            ins_url = ins_href if ins_href.startswith("http") else LI_BASE + ins_href
-            print(f"[LI] Insurance History URL: {ins_url}")
-            await page.goto(ins_url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(1000)
-            ins_soup = BeautifulSoup(await page.content(), "html.parser")
-            insurance_history = _find_table_by_heading(ins_soup, "insurance")
-            if not insurance_history:
-                # Try parsing all tables and pick the most likely one
-                all_tables = _parse_all_tables(ins_soup)
-                for t in all_tables:
-                    h = [x.lower() for x in t["headers"]]
-                    if any(k in " ".join(h) for k in ["effective","insurer","policy","coverage"]):
-                        insurance_history = t["records"]
-                        break
+                # Parse MC number from URL or text
+                import re
+                mc_match = re.search(r'MC[-\s]?(\d+)', detail_text)
+                if mc_match:
+                    record["docket"] = f"MC-{mc_match.group(1)}"
 
-        if auth_href:
-            auth_url = auth_href if auth_href.startswith("http") else LI_BASE + auth_href
-            print(f"[LI] Authority History URL: {auth_url}")
-            await page.goto(auth_url, wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_timeout(1000)
-            auth_soup = BeautifulSoup(await page.content(), "html.parser")
-            authority_history = _find_table_by_heading(auth_soup, "authority")
-            if not authority_history:
-                all_tables = _parse_all_tables(auth_soup)
-                for t in all_tables:
-                    h = [x.lower() for x in t["headers"]]
-                    if any(k in " ".join(h) for k in ["served","decided","docket","action"]):
-                        authority_history = t["records"]
-                        break
+                # Look for status/action info
+                if "active" in detail_text.lower():
+                    record["action"] = "Active"
+                elif "revoked" in detail_text.lower():
+                    record["action"] = "Revoked"
+                elif "inactive" in detail_text.lower():
+                    record["action"] = "Inactive"
+
+                # Look for grant date
+                date_match = re.search(r'Grant(?:ed)?\s*Date[:\s]+(\d{1,2}/\d{1,2}/\d{4})', detail_text)
+                if date_match:
+                    record["decided"] = date_match.group(1)
+
+                authority_history.append(record)
+            except Exception as e:
+                print(f"[MOTUS] Error fetching authority detail: {e}")
+                continue
 
         await browser.close()
 
-    # Normalize insurance
-    ins_normalized = []
-    for row in insurance_history:
-        ins_normalized.append({
-            "effective":        next((row[k] for k in row if "effective" in k.lower() and "cancel" not in k.lower()), ""),
-            "cancel_effective": next((row[k] for k in row if "cancel" in k.lower() and "effective" in k.lower()), ""),
-            "insurer":          next((row[k] for k in row if any(w in k.lower() for w in ["insurer","carrier","company"])), ""),
-            "policy":           next((row[k] for k in row if "policy" in k.lower() or "surety" in k.lower()), ""),
-            "coverage":         next((row[k] for k in row if "coverage" in k.lower() or ("type" in k.lower() and "insurance" in k.lower())), ""),
-            "cancel_method":    next((row[k] for k in row if "method" in k.lower()), ""),
-        })
-
-    # Normalize authority
-    auth_normalized = []
-    for row in authority_history:
-        auth_normalized.append({
-            "served":    next((row[k] for k in row if "served" in k.lower()), ""),
-            "decided":   next((row[k] for k in row if "decided" in k.lower() or "decision" in k.lower()), ""),
-            "docket":    next((row[k] for k in row if "docket" in k.lower()), ""),
-            "authority": next((row[k] for k in row if "authority" in k.lower()), ""),
-            "action":    next((row[k] for k in row if "action" in k.lower() or "grant" in k.lower()), ""),
-        })
-
     return {
-        "insurance_history": ins_normalized,
-        "authority_history": auth_normalized,
+        "insurance_history": [],
+        "insurance_unavailable": (
+            "Insurance history is no longer publicly accessible. "
+            "FMCSA moved this data to MOTUS (motus.dot.gov) which requires "
+            "a Login.gov account to access insurance records."
+        ),
+        "authority_history": authority_history,
+        "authority_source": "MOTUS (motus.dot.gov)",
     }
