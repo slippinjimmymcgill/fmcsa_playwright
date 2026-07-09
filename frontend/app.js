@@ -1,21 +1,29 @@
 const API_BASE = "https://fmcsa-playwright.onrender.com";
 
-// State label positions matching the new SVG paths (cx, cy of each state)
-const STATE_SVG = {
-  WA:[130,100], OR:[90,175], CA:[95,320], NV:[170,240], ID:[210,165],
-  MT:[270,80],  WY:[295,175],UT:[210,265],CO:[295,245],AZ:[195,360],
-  NM:[295,330], ND:[405,85], SD:[405,155],NE:[405,240],KS:[405,300],
-  OK:[420,350], TX:[430,430],MN:[510,140],IA:[510,238],MO:[520,300],
-  AR:[535,348], LA:[540,415],WI:[580,185],IL:[595,265],MS:[560,385],
-  MI:[625,175], IN:[630,228],OH:[660,225],KY:[655,280],TN:[660,318],
-  AL:[648,368], GA:[705,368],FL:[680,455],SC:[738,322],NC:[740,283],
-  VA:[725,268], WV:[688,272],PA:[760,235],NY:[785,195],VT:[815,170],
-  NH:[835,153], ME:[848,140],MA:[832,203],RI:[852,204],CT:[828,218],
-  NJ:[788,238], DE:[793,260],MD:[778,258],DC:[782,261],
-  AK:[150,525], HI:[300,550],
+// State centroids (lat/lng) for bubble placement - D3 projects these
+const STATE_CENTROIDS = {
+  AL:[86.9023,32.3182],AK:[153.3696,56.1326],AZ:[111.0937,34.0489],
+  AR:[91.8318,34.7465],CA:[119.4179,36.7783],CO:[105.7821,39.5501],
+  CT:[72.7554,41.6032],DE:[75.5277,38.9108],FL:[81.5158,27.6648],
+  GA:[83.6431,32.1656],HI:[155.5828,19.8968],ID:[114.7420,44.0682],
+  IL:[89.1965,40.6331],IN:[86.1349,40.2672],IA:[93.0977,41.8780],
+  KS:[98.4842,38.5266],KY:[84.6701,37.8393],LA:[91.9623,30.9843],
+  ME:[69.4455,45.2538],MD:[76.6413,39.0458],MA:[71.5301,42.4072],
+  MI:[84.5603,44.3148],MN:[94.6859,46.7296],MS:[89.6787,32.3547],
+  MO:[91.8318,37.9643],MT:[110.3626,46.8797],NE:[99.9018,41.4925],
+  NV:[116.4194,38.8026],NH:[71.5724,43.1939],NJ:[74.4057,40.0583],
+  NM:[105.8701,34.5199],NY:[74.9481,43.2994],NC:[79.0193,35.7596],
+  ND:[101.0020,47.5515],OH:[82.9071,40.4173],OK:[97.0929,35.4676],
+  OR:[120.5542,43.8041],PA:[77.1945,41.2033],RI:[71.4774,41.5801],
+  SC:[81.1637,33.8361],SD:[99.9018,43.9695],TN:[86.5804,35.5175],
+  TX:[97.5635,31.9686],UT:[111.0937,39.3210],VT:[72.5778,44.5588],
+  VA:[78.6569,37.4316],WA:[120.7401,47.7511],WV:[80.4549,38.5976],
+  WI:[89.6165,43.7844],WY:[107.2903,43.0760],DC:[77.0369,38.9072],
 };
 
 let currentMapData = [];
+let mapInitialized = false;
+let usTopoData = null;
 
 function setStatus(msg, isError = false) {
   const bar = document.getElementById("statusBar");
@@ -152,51 +160,122 @@ function renderAuthority(authority) {
   </tr>`).join("");
 }
 
+async function initMap() {
+  if (mapInitialized) return;
+  try {
+    // Load US TopoJSON from CDN
+    const topo = await d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json");
+    usTopoData = topo;
+    mapInitialized = true;
+  } catch(e) {
+    console.error("Failed to load US map data:", e);
+  }
+}
+
 function renderMap(mapData) {
   currentMapData = mapData;
-  const svg = document.getElementById("usMap");
-  svg.querySelectorAll(".map-dot, .map-label").forEach(e => e.remove());
+  const container = document.getElementById("mapContainer");
+  const svg = d3.select("#usMap");
+  svg.selectAll("*").remove();
+
+  const width = container.clientWidth || 900;
+  const height = Math.round(width * 0.6);
+  svg.attr("viewBox", `0 0 ${width} ${height}`)
+     .attr("height", height);
+
+  const projection = d3.geoAlbersUsa()
+    .scale(width * 1.25)
+    .translate([width / 2, height / 2]);
+
+  const path = d3.geoPath().projection(projection);
+
+  // Draw background
+  svg.append("rect")
+    .attr("width", width).attr("height", height)
+    .attr("fill", "#eaf4fb");
+
+  if (!usTopoData) {
+    svg.append("text")
+      .attr("x", width/2).attr("y", height/2)
+      .attr("text-anchor", "middle").attr("fill", "#777")
+      .text("Map data unavailable");
+    return;
+  }
+
+  const states = topojson.feature(usTopoData, usTopoData.objects.states);
+
+  // Draw states
+  svg.append("g")
+    .selectAll("path")
+    .data(states.features)
+    .join("path")
+    .attr("d", path)
+    .attr("fill", "#c8ddf0")
+    .attr("stroke", "white")
+    .attr("stroke-width", 1);
+
+  // Draw state borders
+  svg.append("path")
+    .datum(topojson.mesh(usTopoData, usTopoData.objects.states, (a, b) => a !== b))
+    .attr("d", path)
+    .attr("fill", "none")
+    .attr("stroke", "white")
+    .attr("stroke-width", 1);
+
   if (!mapData || !mapData.length) return;
 
   const maxCount = Math.max(...mapData.map(d => d.count), 1);
   const tooltip = document.getElementById("mapTooltip");
 
   mapData.forEach(d => {
-    const pos = STATE_SVG[d.state];
-    if (!pos) return;
-    const r = 10 + (d.count / maxCount) * 30;
+    const centroid = STATE_CENTROIDS[d.state];
+    if (!centroid) return;
+
+    // Project [lng, lat] to SVG coords
+    const coords = projection([-centroid[0], centroid[1]]);
+    if (!coords) return;
+
+    const r = 8 + (d.count / maxCount) * 28;
     const oosRatio = d.oos_count / Math.max(d.count, 1);
     const color = oosRatio > 0.5 ? "#c0392b" : oosRatio > 0.2 ? "#e67e22" : "#2980b9";
 
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    circle.setAttribute("cx", pos[0]);
-    circle.setAttribute("cy", pos[1]);
-    circle.setAttribute("r", r);
-    circle.setAttribute("fill", color);
-    circle.setAttribute("opacity", "0.82");
-    circle.setAttribute("class", "map-dot");
-    circle.style.cursor = "pointer";
-    circle.addEventListener("mousemove", e => {
-      tooltip.style.display = "block";
-      tooltip.style.left = (e.clientX + 14) + "px";
-      tooltip.style.top = (e.clientY - 10) + "px";
-      tooltip.innerHTML = `<b>${d.state}</b><br>${d.count} inspection(s)<br>${d.oos_count} OOS (${Math.round(oosRatio*100)}%)`;
-    });
-    circle.addEventListener("mouseleave", () => { tooltip.style.display = "none"; });
-    svg.appendChild(circle);
+    const g = svg.append("g").style("cursor", "pointer");
 
-    const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    text.setAttribute("x", pos[0]);
-    text.setAttribute("y", pos[1] + 4);
-    text.setAttribute("text-anchor", "middle");
-    text.setAttribute("font-size", "9");
-    text.setAttribute("fill", "white");
-    text.setAttribute("font-weight", "bold");
-    text.setAttribute("class", "map-label");
-    text.setAttribute("pointer-events", "none");
-    text.textContent = d.state;
-    svg.appendChild(text);
+    g.append("circle")
+      .attr("cx", coords[0]).attr("cy", coords[1])
+      .attr("r", r)
+      .attr("fill", color)
+      .attr("opacity", 0.82)
+      .attr("stroke", "white")
+      .attr("stroke-width", 1.5);
+
+    g.append("text")
+      .attr("x", coords[0]).attr("y", coords[1] + 4)
+      .attr("text-anchor", "middle")
+      .attr("font-size", 9).attr("fill", "white")
+      .attr("font-weight", "bold")
+      .attr("pointer-events", "none")
+      .text(d.state);
+
+    g.on("mousemove", (event) => {
+      tooltip.style.display = "block";
+      tooltip.style.left = (event.clientX + 14) + "px";
+      tooltip.style.top = (event.clientY - 10) + "px";
+      tooltip.innerHTML = `<b>${d.state}</b><br>${d.count} inspection(s)<br>${d.oos_count} OOS (${Math.round(oosRatio*100)}%)`;
+    }).on("mouseleave", () => { tooltip.style.display = "none"; });
   });
+}
+
+function switchTab(name) {
+  document.querySelectorAll(".tab-btn").forEach((b, i) => {
+    const tabs = ["inspections","crashes","insurance","authority","map"];
+    b.classList.toggle("active", tabs[i] === name);
+  });
+  document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+  document.getElementById("tab-" + name).classList.add("active");
+  if (name === "map") {
+    initMap().then(() => renderMap(currentMapData));
+  }
 }
 
 async function fetchAll() {
@@ -231,6 +310,8 @@ async function fetchAll() {
   } finally {
     btn.disabled = false;
     btn.innerHTML = `<i class="fas fa-search"></i> Search`;
+
+    initMap();
   }
 }
 

@@ -164,3 +164,72 @@ async def debug_excel(dot_number: str):
         df = xl.parse(sheet, nrows=3)
         result[sheet] = {"columns": list(df.columns), "sample_rows": df.fillna("").to_dict(orient="records")}
     return {"sheets": result}
+
+@app.get("/debug-li/{dot_number}")
+async def debug_li(dot_number: str):
+    """Debug L&I navigation - shows all links and table headings found on carrier 
+    detail page"""
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+
+    LI_SEARCH_URL = "https://li-public.fmcsa.dot.gov/LIVIEW/pkg_carrquery.prc_carrlist"
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+        )
+        page = await context.new_page()
+        await page.goto(LI_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(3000)
+        
+        # click through disclaimer if needed
+        if await page.locator("input[name='pn_dotno']").count() == 0:
+            for sel in ["input[type='submit']", "a:has-text('Carrier Search')", "a:has-text('Continue')"]:
+                btn = page.locator(sel).first
+                if await btn.count() > 0:
+                    await btn.click()
+                    await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    await page.wait_for_timeout(2000)
+                    break
+
+        await page.fill("input[name='pn_dotno']", dot_number)
+        await page.wait_for_timeout(500)
+        await page.click("input[type='submit'][value='Search']")
+        await page.wait_for_load_state("domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(2000)
+
+        html_link = page.locator("a:has-text('HTML')").first
+        if await html_link.count() == 0:
+            await browser.close()
+            return {"error": "No HTML link found on search results page."}
+          
+        await html_link.click()
+        await page.wait_for_load_state("domcontentloaded", timeout=30000)
+        await page.wait_for_timeout(2000)
+
+        html = await page.content()
+        url = page.url
+        await browser.close()
+    
+    soup = BeautifulSoup(html, "html.parser")
+    links = [{"text": a.get_text(strip=True), "href": a.get("href", "")} for a in soup.find_all("a") if a.get_text(strip=True)]
+    tables = []
+    for i, table in enumerate(soup.find_all("table")):
+        rows = table.find_all("tr")
+        if rows:
+            headers = [td.get_text(strip=True) for td in rows[0].find_all(["th", "td"])]
+            tables.append({
+                "table_index": i,
+                "headers": headers,
+                "row_count": len(rows),
+                "sample_rows": [
+                    [td.get_text(strip=True) for td in r.find_all("td")] for r in rows[1:4]
+                ]
+            })
+    
+    return {"url": url, "links": links[:30], "tables": tables[:10]}
