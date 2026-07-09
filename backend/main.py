@@ -430,3 +430,50 @@ async def debug_li3(dot_number: str):
 
     except Exception as e:
         return {"error": str(e), "traceback": traceback.format_exc()}
+
+@app.get("/debug-li4/{dot_number}")
+async def debug_li4(dot_number: str):
+    """Shows raw content of the direct L&I carrier page."""
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+    import traceback
+
+    url = (
+        f"https://li-public.fmcsa.dot.gov/LIVIEW/pkg_carrquery.prc_getcarrinfo"
+        f"?pv_vpath=LIVIEW&pn_dotno={dot_number}"
+    )
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+            )
+            page = await context.new_page()
+            resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+            html = await page.content()
+            final_url = page.url
+            status = resp.status
+            await browser.close()
+
+        soup = BeautifulSoup(html, "html.parser")
+        links = [
+            {"text": a.get_text(strip=True), "href": a.get("href", "")}
+            for a in soup.find_all("a") if a.get_text(strip=True)
+        ]
+        page_text = soup.get_text()[:3000]
+
+        return {
+            "status": status,
+            "final_url": final_url,
+            "html_length": len(html),
+            "links": links,
+            "page_text_snippet": page_text,
+        }
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
