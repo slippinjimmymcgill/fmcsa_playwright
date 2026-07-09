@@ -233,3 +233,78 @@ async def debug_li(dot_number: str):
             })
     
     return {"url": url, "links": links[:30], "tables": tables[:10]}
+
+@app.get("/debug-li2/{dot_number}")
+async def debug_li2(dot_number: str):
+    """Simplified L&I debug - just loads the search page and returns what it sees."""
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+    import traceback
+
+    LI_SEARCH_URL = "https://li-public.fmcsa.dot.gov/LIVIEW/pkg_carrquery.prc_carrlist"
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+            )
+            page = await context.new_page()
+
+            # Step 1: load the page
+            resp = await page.goto(LI_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(3000)
+            step1_url = page.url
+            step1_status = resp.status
+            step1_html = await page.content()
+            step1_soup = BeautifulSoup(step1_html, "html.parser")
+            step1_inputs = [
+                {"name": i.get("name",""), "type": i.get("type",""), "value": i.get("value","")}
+                for i in step1_soup.find_all("input")
+            ]
+            step1_links = [
+                {"text": a.get_text(strip=True), "href": a.get("href","")}
+                for a in step1_soup.find_all("a") if a.get_text(strip=True)
+            ][:20]
+
+            # Step 2: check if DOT input is already visible
+            dot_input_visible = await page.locator("input[name='pn_dotno']").count() > 0
+
+            result = {
+                "step1_url": step1_url,
+                "step1_status": step1_status,
+                "dot_input_visible_immediately": dot_input_visible,
+                "step1_inputs": step1_inputs,
+                "step1_links": step1_links[:15],
+            }
+
+            # Step 3: if not visible, try clicking through
+            if not dot_input_visible:
+                clicked = None
+                for sel in ["input[type='submit']", "input[type='button']", "a:has-text('Search')", "a:has-text('Continue')", "a:has-text('Accept')"]:
+                    btn = page.locator(sel).first
+                    if await btn.count() > 0:
+                        clicked = sel
+                        await btn.click()
+                        await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                        await page.wait_for_timeout(2000)
+                        break
+                result["clicked_selector"] = clicked
+                result["step2_url"] = page.url
+                result["dot_input_visible_after_click"] = await page.locator("input[name='pn_dotno']").count() > 0
+                step2_html = await page.content()
+                step2_soup = BeautifulSoup(step2_html, "html.parser")
+                result["step2_inputs"] = [
+                    {"name": i.get("name",""), "type": i.get("type",""), "value": i.get("value","")}
+                    for i in step2_soup.find_all("input")
+                ]
+
+            await browser.close()
+            return result
+
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
