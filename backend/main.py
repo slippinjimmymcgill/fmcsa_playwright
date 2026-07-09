@@ -136,10 +136,8 @@ async def get_full(dot_number: str):
         li_data = await get_li_data(dot_number)
         insurance_history = li_data.get("insurance_history", [])
         authority_history = li_data.get("authority_history", [])
-        insurance_unavailable = li_data.get("insurance_unavailable", "")
     except Exception as e:
         insurance_history, authority_history = [], []
-        insurance_unavailable = ""
         warnings.append(f"L&I data fetch failed: {e}")
 
     return {
@@ -149,7 +147,6 @@ async def get_full(dot_number: str):
         "crashes": crashes,
         "inspection_map": map_data,
         "insurance_history": insurance_history,
-        "insurance_unavailable": insurance_unavailable,
         "authority_history": authority_history,
         "warnings": warnings,
     }
