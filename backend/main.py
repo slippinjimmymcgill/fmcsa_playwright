@@ -308,3 +308,125 @@ async def debug_li2(dot_number: str):
 
     except Exception as e:
         return {"error": str(e), "traceback": traceback.format_exc()}
+    
+
+@app.get("/debug-li3/{dot_number}")
+async def debug_li3(dot_number: str):
+    """Shows the actual L&I carrier detail page content - links and all table headers."""
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+    import traceback
+
+    LI_SEARCH_URL = "https://li-public.fmcsa.dot.gov/LIVIEW/pkg_carrquery.prc_carrlist"
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+            )
+            page = await context.new_page()
+            await page.goto(LI_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            await page.fill("input[name='n_dotno']", dot_number)
+            await page.wait_for_timeout(500)
+            await page.click("input[type='submit'][value='   Search   ']")
+            await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            search_html = await page.content()
+            search_soup = BeautifulSoup(search_html, "html.parser")
+            search_links = [
+                {"text": a.get_text(strip=True), "href": a.get("href", "")}
+                for a in search_soup.find_all("a") if a.get_text(strip=True)
+            ]
+
+            # Click HTML link
+            html_link = page.locator("a:has-text('HTML')").first
+            if await html_link.count() == 0:
+                await browser.close()
+                return {
+                    "error": "No HTML link on search results",
+                    "search_url": page.url,
+                    "search_links": search_links[:20],
+                    "search_text_snippet": search_html[:2000],
+                }
+
+            await html_link.click()
+            await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            carrier_html = await page.content()
+            carrier_url = page.url
+            carrier_soup = BeautifulSoup(carrier_html, "html.parser")
+            carrier_links = [
+                {"text": a.get_text(strip=True), "href": a.get("href", "")}
+                for a in carrier_soup.find_all("a") if a.get_text(strip=True)
+            ]
+
+            # Now click Insurance History
+            ins_link = page.locator("a:has-text('Insurance History')").first
+            ins_result = {}
+            if await ins_link.count() > 0:
+                await ins_link.click()
+                await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(1000)
+                ins_html = await page.content()
+                ins_soup = BeautifulSoup(ins_html, "html.parser")
+                ins_tables = []
+                for i, t in enumerate(ins_soup.find_all("table")):
+                    rows = t.find_all("tr")
+                    ins_tables.append({
+                        "index": i,
+                        "headers": [td.get_text(strip=True) for td in (rows[0].find_all(["th","td"]) if rows else [])],
+                        "row_count": len(rows),
+                        "sample": [[td.get_text(strip=True) for td in r.find_all("td")] for r in rows[1:3]],
+                    })
+                ins_result = {
+                    "url": page.url,
+                    "tables": ins_tables,
+                    "page_text_snippet": ins_soup.get_text()[:1500],
+                }
+                await page.go_back()
+                await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                await page.wait_for_timeout(1000)
+
+            # Click Authority History
+            auth_link = page.locator("a:has-text('Authority History')").first
+            auth_result = {}
+            if await auth_link.count() > 0:
+                await auth_link.click()
+                await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(1000)
+                auth_html = await page.content()
+                auth_soup = BeautifulSoup(auth_html, "html.parser")
+                auth_tables = []
+                for i, t in enumerate(auth_soup.find_all("table")):
+                    rows = t.find_all("tr")
+                    auth_tables.append({
+                        "index": i,
+                        "headers": [td.get_text(strip=True) for td in (rows[0].find_all(["th","td"]) if rows else [])],
+                        "row_count": len(rows),
+                        "sample": [[td.get_text(strip=True) for td in r.find_all("td")] for r in rows[1:3]],
+                    })
+                auth_result = {
+                    "url": page.url,
+                    "tables": auth_tables,
+                    "page_text_snippet": auth_soup.get_text()[:1500],
+                }
+
+            await browser.close()
+            return {
+                "carrier_url": carrier_url,
+                "carrier_links": carrier_links[:25],
+                "insurance_page": ins_result,
+                "authority_page": auth_result,
+            }
+
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
