@@ -1,46 +1,76 @@
 """
-Scrapes Insurance History and Authority History from the FMCSA
-Licensing & Insurance public site (li-public.fmcsa.dot.gov).
+Scrapes Insurance History and Authority History from FMCSA L&I site.
 
-Key finding from debug: field name is 'n_dotno' not 'pn_dotno'.
-The search form is on the first page load - no disclaimer click needed.
+The search form is protected by reCAPTCHA so we bypass it entirely
+by navigating directly to the carrier detail URL using the DOT number.
+Direct URL pattern (no CAPTCHA, no form):
+https://li-public.fmcsa.dot.gov/LIVIEW/pkg_carrquery.prc_getcarrinfo?pv_vpath=LIVIEW&pn_dotno={DOT}
 """
 
 from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 
-LI_SEARCH_URL = "https://li-public.fmcsa.dot.gov/LIVIEW/pkg_carrquery.prc_carrlist"
 LI_BASE = "https://li-public.fmcsa.dot.gov"
+LI_CARRIER_URL = (
+    "https://li-public.fmcsa.dot.gov/LIVIEW/pkg_carrquery.prc_getcarrinfo"
+    "?pv_vpath=LIVIEW&pn_dotno={dot}"
+)
 
 
-def _parse_table_by_heading(soup: BeautifulSoup, heading_text: str) -> list[dict]:
-    """Find a table near a heading containing heading_text and parse into list of dicts."""
-    for tag in soup.find_all(["h2", "h3", "h4", "b", "strong", "td", "th", "font"]):
-        if heading_text.lower() in tag.get_text().lower():
+def _parse_all_tables(soup: BeautifulSoup) -> list[dict]:
+    """Parse every table on the page into a list of records, tagged with table index."""
+    results = []
+    for i, table in enumerate(soup.find_all("table")):
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+        headers = [th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])]
+        headers = [h for h in headers if h]
+        if not headers:
+            continue
+        records = []
+        for row in rows[1:]:
+            cells = [td.get_text(strip=True) for td in row.find_all("td")]
+            if not any(cells):
+                continue
+            while len(cells) < len(headers):
+                cells.append("")
+            records.append(dict(zip(headers, cells[:len(headers)])))
+        if records:
+            results.append({"table_index": i, "headers": headers, "records": records})
+    return results
+
+
+def _find_table_by_heading(soup: BeautifulSoup, keyword: str) -> list[dict]:
+    """Find the table that follows a heading containing keyword."""
+    for tag in soup.find_all(["h1","h2","h3","h4","h5","b","strong","font","td","th"]):
+        text = tag.get_text(strip=True).lower()
+        if keyword.lower() in text and len(text) < 100:
             table = tag.find_next("table")
-            if not table:
-                continue
-            rows = table.find_all("tr")
-            if len(rows) < 2:
-                continue
-            headers = [th.get_text(strip=True) for th in rows[0].find_all(["th", "td"])]
-            headers = [h for h in headers if h]
-            if not headers:
-                continue
-            records = []
-            for row in rows[1:]:
-                cells = [td.get_text(strip=True) for td in row.find_all("td")]
-                if not any(cells):
+            if table:
+                rows = table.find_all("tr")
+                if len(rows) < 2:
                     continue
-                while len(cells) < len(headers):
-                    cells.append("")
-                records.append(dict(zip(headers, cells[:len(headers)])))
-            if records:
-                return records
+                headers = [th.get_text(strip=True) for th in rows[0].find_all(["th","td"])]
+                headers = [h for h in headers if h]
+                if not headers:
+                    continue
+                records = []
+                for row in rows[1:]:
+                    cells = [td.get_text(strip=True) for td in row.find_all("td")]
+                    if not any(cells):
+                        continue
+                    while len(cells) < len(headers):
+                        cells.append("")
+                    records.append(dict(zip(headers, cells[:len(headers)])))
+                if records:
+                    return records
     return []
 
 
 async def get_li_data(dot_number: str) -> dict:
+    url = LI_CARRIER_URL.format(dot=dot_number)
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -52,90 +82,90 @@ async def get_li_data(dot_number: str) -> dict:
         )
         page = await context.new_page()
 
-        print(f"[LI] Loading search page...")
-        await page.goto(LI_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+        print(f"[LI] Direct carrier URL: {url}")
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         await page.wait_for_timeout(2000)
 
-        # Field is 'n_dotno' (confirmed from debug output)
-        dot_field = page.locator("input[name='n_dotno']").first
-        if await dot_field.count() == 0:
+        carrier_html = await page.content()
+        carrier_soup = BeautifulSoup(carrier_html, "html.parser")
+        carrier_text = carrier_soup.get_text().lower()
+
+        # Check if we got a real carrier page or an error/redirect
+        if "no carrier" in carrier_text or "not found" in carrier_text or len(carrier_html) < 1000:
             await browser.close()
-            print("[LI] Could not find n_dotno input field")
             return {"insurance_history": [], "authority_history": []}
 
-        await page.fill("input[name='n_dotno']", dot_number)
-        await page.wait_for_timeout(500)
-
-        # Click the Search submit button
-        await page.click("input[type='submit'][value='   Search   ']")
-        await page.wait_for_load_state("domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(2000)
-
-        # Check for reCAPTCHA challenge
-        page_text = await page.inner_text("body")
-        if "captcha" in page_text.lower() or "robot" in page_text.lower():
-            await browser.close()
-            print("[LI] Blocked by reCAPTCHA")
-            return {"insurance_history": [], "authority_history": [], "blocked_by_captcha": True}
-
-        # Click HTML link for this carrier
-        html_link = page.locator("a:has-text('HTML')").first
-        if await html_link.count() == 0:
-            await browser.close()
-            print("[LI] No HTML link found on results page")
-            return {"insurance_history": [], "authority_history": []}
-
-        await html_link.click()
-        await page.wait_for_load_state("domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(2000)
+        # Find all links on carrier detail page
+        all_links = [(a.get_text(strip=True), a.get("href",""))
+                     for a in carrier_soup.find_all("a") if a.get_text(strip=True)]
+        print(f"[LI] Carrier page links: {[l[0] for l in all_links[:20]]}")
 
         insurance_history = []
         authority_history = []
 
-        # Click Insurance History link
-        ins_link = page.locator("a:has-text('Insurance History')").first
-        if await ins_link.count() > 0:
-            await ins_link.click()
-            await page.wait_for_load_state("domcontentloaded", timeout=30000)
+        # Look for Insurance History link
+        ins_href = None
+        auth_href = None
+        for text, href in all_links:
+            if "insurance" in text.lower() and "history" in text.lower():
+                ins_href = href
+            if "authority" in text.lower() and "history" in text.lower():
+                auth_href = href
+
+        if ins_href:
+            ins_url = ins_href if ins_href.startswith("http") else LI_BASE + ins_href
+            print(f"[LI] Insurance History URL: {ins_url}")
+            await page.goto(ins_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(1000)
             ins_soup = BeautifulSoup(await page.content(), "html.parser")
-            insurance_history = _parse_table_by_heading(ins_soup, "Insurance")
-            await page.go_back()
-            await page.wait_for_load_state("domcontentloaded", timeout=15000)
-            await page.wait_for_timeout(1000)
+            insurance_history = _find_table_by_heading(ins_soup, "insurance")
+            if not insurance_history:
+                # Try parsing all tables and pick the most likely one
+                all_tables = _parse_all_tables(ins_soup)
+                for t in all_tables:
+                    h = [x.lower() for x in t["headers"]]
+                    if any(k in " ".join(h) for k in ["effective","insurer","policy","coverage"]):
+                        insurance_history = t["records"]
+                        break
 
-        # Click Authority History link
-        auth_link = page.locator("a:has-text('Authority History')").first
-        if await auth_link.count() > 0:
-            await auth_link.click()
-            await page.wait_for_load_state("domcontentloaded", timeout=30000)
+        if auth_href:
+            auth_url = auth_href if auth_href.startswith("http") else LI_BASE + auth_href
+            print(f"[LI] Authority History URL: {auth_url}")
+            await page.goto(auth_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(1000)
             auth_soup = BeautifulSoup(await page.content(), "html.parser")
-            authority_history = _parse_table_by_heading(auth_soup, "Authority")
+            authority_history = _find_table_by_heading(auth_soup, "authority")
+            if not authority_history:
+                all_tables = _parse_all_tables(auth_soup)
+                for t in all_tables:
+                    h = [x.lower() for x in t["headers"]]
+                    if any(k in " ".join(h) for k in ["served","decided","docket","action"]):
+                        authority_history = t["records"]
+                        break
 
         await browser.close()
 
-    # Normalize insurance columns - try multiple possible header names
+    # Normalize insurance
     ins_normalized = []
     for row in insurance_history:
         ins_normalized.append({
-            "effective":        row.get("Effective", row.get("Eff Date", row.get("Effective Date", ""))),
-            "cancel_effective": row.get("Cancel Effective", row.get("Cancel Eff Date", row.get("Cancellation Date", ""))),
-            "insurer":          row.get("Insurance Carrier", row.get("Insurer", row.get("Company", ""))),
-            "policy":           row.get("Policy/Surety Number", row.get("Policy Number", row.get("Policy", ""))),
-            "coverage":         row.get("Coverage", row.get("Type of Insurance", row.get("Type", ""))),
-            "cancel_method":    row.get("Cancel Method", row.get("Cancellation Method", row.get("Method", ""))),
+            "effective":        next((row[k] for k in row if "effective" in k.lower() and "cancel" not in k.lower()), ""),
+            "cancel_effective": next((row[k] for k in row if "cancel" in k.lower() and "effective" in k.lower()), ""),
+            "insurer":          next((row[k] for k in row if any(w in k.lower() for w in ["insurer","carrier","company"])), ""),
+            "policy":           next((row[k] for k in row if "policy" in k.lower() or "surety" in k.lower()), ""),
+            "coverage":         next((row[k] for k in row if "coverage" in k.lower() or ("type" in k.lower() and "insurance" in k.lower())), ""),
+            "cancel_method":    next((row[k] for k in row if "method" in k.lower()), ""),
         })
 
-    # Normalize authority columns
+    # Normalize authority
     auth_normalized = []
     for row in authority_history:
         auth_normalized.append({
-            "served":    row.get("Served", row.get("Date Served", row.get("Service Date", ""))),
-            "decided":   row.get("Decided", row.get("Decision Date", row.get("Date Decided", ""))),
-            "docket":    row.get("Docket Number", row.get("Docket No.", row.get("Docket", ""))),
-            "authority": row.get("Authority", row.get("Authority Type", row.get("Type", ""))),
-            "action":    row.get("Action", row.get("Grant/Deny", row.get("Decision", ""))),
+            "served":    next((row[k] for k in row if "served" in k.lower()), ""),
+            "decided":   next((row[k] for k in row if "decided" in k.lower() or "decision" in k.lower()), ""),
+            "docket":    next((row[k] for k in row if "docket" in k.lower()), ""),
+            "authority": next((row[k] for k in row if "authority" in k.lower()), ""),
+            "action":    next((row[k] for k in row if "action" in k.lower() or "grant" in k.lower()), ""),
         })
 
     return {
