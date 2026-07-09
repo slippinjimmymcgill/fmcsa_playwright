@@ -477,3 +477,79 @@ async def debug_li4(dot_number: str):
         }
     except Exception as e:
         return {"error": str(e), "traceback": traceback.format_exc()}
+    
+@app.get("/debug-li5/{dot_number}")
+async def debug_li5(dot_number: str):
+    """Find the real L&I carrier URL by following the link from SAFER page."""
+    from playwright.async_api import async_playwright
+    from bs4 import BeautifulSoup
+    import traceback
+
+    safer_url = (
+        f"https://safer.fmcsa.dot.gov/query.asp"
+        f"?searchtype=ANY&query_type=queryCarrierSnapshot"
+        f"&query_param=USDOT&query_string={dot_number}"
+    )
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800},
+            )
+            page = await context.new_page()
+            await page.goto(safer_url, wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_timeout(2000)
+
+            html = await page.content()
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Find all links that mention L&I or insurance or licensing
+            li_links = []
+            for a in soup.find_all("a"):
+                href = a.get("href", "")
+                text = a.get_text(strip=True)
+                if any(kw in (href+text).lower() for kw in
+                       ["li-public", "licens", "insur", "li.fmcsa", "lview"]):
+                    li_links.append({"text": text, "href": href})
+
+            # Also get ALL links for reference
+            all_links = [
+                {"text": a.get_text(strip=True), "href": a.get("href", "")}
+                for a in soup.find_all("a") if a.get_text(strip=True)
+            ]
+
+            # Try clicking the L&I link if found
+            li_page_data = {}
+            li_link_el = page.locator("a[href*='li-public'], a[href*='li.fmcsa'], a:has-text('Licensing'), a:has-text('Insurance')").first
+            if await li_link_el.count() > 0:
+                href = await li_link_el.get_attribute("href")
+                li_page_data["clicked_href"] = href
+                async with context.expect_page() as new_page_info:
+                    await li_link_el.click()
+                li_page = await new_page_info.value
+                await li_page.wait_for_load_state("domcontentloaded", timeout=15000)
+                await li_page.wait_for_timeout(1000)
+                li_page_data["final_url"] = li_page.url
+                li_html = await li_page.content()
+                li_soup = BeautifulSoup(li_html, "html.parser")
+                li_page_data["links"] = [
+                    {"text": a.get_text(strip=True), "href": a.get("href", "")}
+                    for a in li_soup.find_all("a") if a.get_text(strip=True)
+                ]
+                li_page_data["text_snippet"] = li_soup.get_text()[:2000]
+
+            await browser.close()
+
+            return {
+                "safer_li_links": li_links,
+                "all_safer_links": all_links[:30],
+                "li_page": li_page_data,
+            }
+
+    except Exception as e:
+        return {"error": str(e), "traceback": traceback.format_exc()}
