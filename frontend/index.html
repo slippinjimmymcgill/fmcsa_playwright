@@ -69,9 +69,6 @@
     @keyframes spin { to { transform: rotate(360deg); } }
 
     .hidden { display: none !important; }
-
-    #stateGroup path { transition: fill 0.15s; }
-    #stateGroup path:hover { fill: #7fb3d3; cursor: default; }
   </style>
 </head>
 <body>
@@ -166,80 +163,25 @@
     <!-- Map Tab -->
     <div class="tab-content" id="tab-map">
       <p style="font-size:0.85rem;color:#555;margin-bottom:12px;">
-        Bubble size and color intensity represent number of inspections per state.
-        <span style="color:#c0392b">●</span> Red = high OOS rate
-        <span style="color:#e67e22;margin-left:8px">●</span> Orange = moderate
-        <span style="color:#2980b9;margin-left:8px">●</span> Blue = low OOS rate
+        Bubble size and color represent inspections per state.
+        <span style="color:#c0392b">●</span> Red = high OOS (&gt;50%)
+        <span style="color:#e67e22;margin-left:8px">●</span> Orange = moderate (20-50%)
+        <span style="color:#2980b9;margin-left:8px">●</span> Blue = low OOS (&lt;20%)
       </p>
-      <div style="background:#e8f4f8;border-radius:8px;overflow:hidden">
-        <svg id="usMap" viewBox="0 0 960 600" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block">
-          <rect width="960" height="600" fill="#d6eaf8"/>
-          <!-- State paths - simplified US states -->
-          <g id="stateGroup" fill="#b8cfe8" stroke="white" stroke-width="1.5">
-            <path id="s-WA" d="M153,54 L90,69 L68,110 L100,116 L113,155 L193,142 L193,80z"/>
-            <path id="s-OR" d="M68,110 L100,116 L113,155 L113,230 L68,230 L50,195 L55,150z"/>
-            <path id="s-CA" d="M68,230 L113,230 L135,295 L140,360 L115,400 L80,385 L60,330 L50,270z"/>
-            <path id="s-NV" d="M113,155 L193,142 L210,220 L175,310 L135,295 L113,230z"/>
-            <path id="s-ID" d="M193,80 L193,142 L210,220 L245,205 L245,155 L220,110 L215,80z"/>
-            <path id="s-MT" d="M193,80 L215,80 L220,110 L320,110 L345,90 L345,60 L255,54 L220,58z"/>
-            <path id="s-WY" d="M245,155 L245,205 L340,205 L340,145 L320,110 L245,110z"/>
-            <path id="s-UT" d="M175,310 L210,220 L245,205 L240,305 L195,305z"/>
-            <path id="s-CO" d="M245,205 L340,205 L340,280 L240,280 L240,305 L245,205z"/>
-            <path id="s-AZ" d="M140,360 L175,310 L195,305 L240,305 L240,370 L210,410 L160,405z"/>
-            <path id="s-NM" d="M240,305 L340,280 L345,370 L280,370 L240,370z"/>
-            <path id="s-ND" d="M345,60 L345,90 L320,110 L460,112 L460,75 L410,65z"/>
-            <path id="s-SD" d="M320,110 L340,145 L340,205 L460,200 L460,112z"/>
-            <path id="s-NE" d="M340,205 L340,280 L460,275 L460,200z"/>
-            <path id="s-KS" d="M340,280 L460,275 L460,325 L345,325 L345,295z"/>
-            <path id="s-OK" d="M345,325 L460,325 L480,325 L490,370 L430,375 L345,370z"/>
-            <path id="s-TX" d="M345,370 L430,375 L490,370 L520,410 L505,465 L450,490 L390,480 L345,440 L320,400z"/>
-            <path id="s-MN" d="M460,75 L460,112 L460,200 L540,200 L570,170 L570,100 L540,65 L500,60z"/>
-            <path id="s-IA" d="M460,200 L460,275 L575,270 L575,210 L540,200z"/>
-            <path id="s-MO" d="M460,275 L460,325 L480,325 L540,330 L575,315 L580,270 L575,270z"/>
-            <path id="s-AR" d="M480,325 L490,370 L580,370 L590,330 L540,330z"/>
-            <path id="s-LA" d="M490,370 L505,465 L540,450 L580,440 L590,390 L580,370z"/>
-            <path id="s-WI" d="M540,200 L570,170 L610,160 L625,200 L600,220 L575,210z"/>
-            <path id="s-IL" d="M575,210 L600,220 L625,250 L610,305 L575,315 L575,270 L575,210z"/>
-            <path id="s-MS" d="M540,330 L590,330 L590,390 L580,440 L540,450 L530,400 L540,360z"/>
-            <path id="s-MI" d="M580,160 L610,160 L625,200 L640,200 L660,170 L640,140 L610,140z"/>
-            <path id="s-IN" d="M600,220 L625,250 L650,250 L650,205 L625,200z"/>
-            <path id="s-OH" d="M625,250 L650,250 L690,240 L685,200 L650,205z"/>
-            <path id="s-KY" d="M610,305 L625,250 L650,250 L690,240 L700,280 L665,300 L640,310z"/>
-            <path id="s-TN" d="M610,305 L640,310 L665,300 L700,280 L720,310 L680,335 L615,335z"/>
-            <path id="s-AL" d="M615,335 L680,335 L685,385 L660,400 L620,395 L615,370z"/>
-            <path id="s-GA" d="M680,335 L720,310 L740,340 L730,390 L700,410 L685,385z"/>
-            <path id="s-FL" d="M660,400 L685,385 L700,410 L720,430 L710,480 L670,510 L640,490 L630,450z"/>
-            <path id="s-SC" d="M720,310 L755,300 L765,330 L745,345 L720,340 L720,315z"/>
-            <path id="s-NC" d="M700,280 L740,265 L780,270 L790,285 L755,300 L720,310 L700,280z"/>
-            <path id="s-VA" d="M700,280 L665,300 L700,280 L720,260 L760,250 L780,270 L740,265z"/>
-            <path id="s-WV" d="M665,300 L700,280 L720,260 L730,270 L715,285 L700,280 L690,240 L680,260 L665,280z"/>
-            <path id="s-PA" d="M730,230 L790,220 L800,250 L760,250 L730,245z"/>
-            <path id="s-NY" d="M760,170 L830,165 L845,185 L810,200 L790,220 L730,230 L720,210 L740,190z"/>
-            <path id="s-VT" d="M810,155 L830,165 L820,185 L805,185 L800,165z"/>
-            <path id="s-NH" d="M830,140 L840,155 L830,165 L810,155 L815,140z"/>
-            <path id="s-ME" d="M840,120 L860,130 L855,165 L840,155 L830,140z"/>
-            <path id="s-MA" d="M810,200 L845,185 L855,195 L840,210 L820,210z"/>
-            <path id="s-RI" d="M845,200 L855,195 L858,208 L848,210z"/>
-            <path id="s-CT" d="M820,210 L840,210 L838,225 L815,225z"/>
-            <path id="s-NJ" d="M790,220 L800,250 L785,255 L775,240 L780,225z"/>
-            <path id="s-DE" d="M785,255 L800,250 L798,265 L785,265z"/>
-            <path id="s-MD" d="M760,250 L800,250 L800,265 L770,270 L755,265 L760,255z"/>
-            <path id="s-DC" d="M778,260 L783,258 L784,263 L779,264z"/>
-            <path id="s-AK" d="M100,480 L200,480 L200,570 L100,570z"/>
-            <path id="s-HI" d="M250,530 L350,530 L350,570 L250,570z"/>
-          </g>
-          <!-- Bubbles rendered by JS -->
-        </svg>
+      <div id="mapContainer" style="background:#eaf4fb;border-radius:8px;overflow:hidden;position:relative">
+        <svg id="usMap" style="width:100%;display:block"></svg>
+        <div id="mapTooltip" style="display:none;position:fixed;background:#003366;color:white;padding:8px 12px;border-radius:6px;font-size:0.82rem;pointer-events:none;z-index:999"></div>
       </div>
-      <div class="map-legend">
+      <div class="map-legend" style="margin-top:10px">
         <span><span class="legend-dot" style="background:#c0392b"></span> High OOS (&gt;50%)</span>
         <span><span class="legend-dot" style="background:#e67e22"></span> Moderate OOS (20-50%)</span>
         <span><span class="legend-dot" style="background:#2980b9"></span> Low OOS (&lt;20%)</span>
       </div>
-      <div id="mapTooltip" style="display:none;position:fixed;background:#003366;color:white;padding:8px 12px;border-radius:6px;font-size:0.82rem;pointer-events:none;z-index:999"></div>
     </div>
 
 </div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
