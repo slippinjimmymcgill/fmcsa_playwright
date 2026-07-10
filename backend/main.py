@@ -44,6 +44,16 @@ async def get_inspections(dot_number: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/li/{dot_number}")
+async def get_li_data(dot_number: str):
+    """Fetch Insurance and Authority History from DOT Open Data Portal."""
+    try:
+        data = await get_li_data(dot_number)
+        return {"status": "ok", **data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/full/{dot_number}")
 async def get_full(dot_number: str):
     """Combined: carrier details (SAFER) + inspections + crashes (SMS Excel)."""

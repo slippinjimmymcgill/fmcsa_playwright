@@ -2,16 +2,23 @@
 Fetches Insurance History and Authority History from FMCSA datasets
 on the DOT Open Data Portal (data.transportation.gov) via Socrata API.
 
-Confirmed working dataset IDs:
-  AuthHist: 9mw4-x3tu  (dot_number is 8-digit zero-padded)
-  InsHist:  6sqe-dvqs  (InsHist - All With History)
+Confirmed working dataset IDs (from debug-socrata + DOT Hub UI):
+  InsHist:  6sqe-dvqs  (padded 8-digit DOT, e.g. '03576562')
+  AuthHist: 9mw4-x3tu  (padded 8-digit DOT)
+  Motus InsHist:  qh9u-swkp (try unpadded USDOT_NUMBER)
+  Motus AuthHist: 6eyk-hxee (try unpadded USDOT_NUMBER)
+
+Confirmed InsHist field names from debug-socrata sample:
+  name_company, policy_no, effective_date, cancl_effective_date,
+  cancl_method, mod_col_3 (coverage type), ins_form_code
 """
 
 import httpx
 
 SOCRATA_BASE = "https://data.transportation.gov/resource"
-AUTHHIST_ID  = "9mw4-x3tu"
-INSHIST_ID   = "6sqe-dvqs"
+
+INSHIST_IDS  = ["6sqe-dvqs", "qh9u-swkp"]
+AUTHHIST_IDS = ["9mw4-x3tu", "6eyk-hxee"]
 
 HEADERS = {"Accept": "application/json"}
 
@@ -41,37 +48,50 @@ async def _socrata_get(dataset_id: str, where: str, limit: int = 100) -> list[di
 async def get_li_data(dot_number: str) -> dict:
     padded = _pad_dot(dot_number)
 
-    # Insurance History - try padded and unpadded DOT
-    insurance_raw = await _socrata_get(INSHIST_ID, f"dot_number='{padded}'")
-    if not insurance_raw:
-        insurance_raw = await _socrata_get(INSHIST_ID, f"dot_number='{dot_number}'")
+    # Insurance History
+    insurance_raw = []
+    for ds_id in INSHIST_IDS:
+        rows = await _socrata_get(ds_id, f"dot_number='{padded}'")
+        if not rows:
+            # Try unpadded and USDOT_NUMBER variants
+            rows = await _socrata_get(ds_id, f"usdot_number='{dot_number}'")
+        if rows:
+            insurance_raw = rows
+            print(f"[LI] Insurance: {len(rows)} records from {ds_id}")
+            break
 
-    # Authority History - confirmed padded works
-    authority_raw = await _socrata_get(AUTHHIST_ID, f"dot_number='{padded}'")
+    # Authority History
+    authority_raw = []
+    for ds_id in AUTHHIST_IDS:
+        rows = await _socrata_get(ds_id, f"dot_number='{padded}'")
+        if not rows:
+            rows = await _socrata_get(ds_id, f"usdot_number='{dot_number}'")
+        if rows:
+            authority_raw = rows
+            print(f"[LI] Authority: {len(rows)} records from {ds_id}")
+            break
 
-    print(f"[LI] Insurance: {len(insurance_raw)} records, Authority: {len(authority_raw)} records")
-
-    # Normalize insurance - field names confirmed from 6sqe-dvqs
+    # Normalize insurance - confirmed field names from 6sqe-dvqs
     ins_normalized = []
     for row in insurance_raw:
         ins_normalized.append({
-            "effective":        row.get("effective_date") or row.get("eff_date") or "",
-            "cancel_effective": row.get("cancel_effective_date") or row.get("cancel_eff_date") or "",
-            "insurer":          row.get("ins_company_name") or row.get("company_name") or row.get("insurer") or "",
-            "policy":           row.get("policy_number") or row.get("policy_surety_number") or "",
-            "coverage":         row.get("type_of_ins") or row.get("insurance_type") or row.get("coverage") or "",
-            "cancel_method":    row.get("cancel_method") or row.get("filing_status_reason") or "",
+            "effective":        row.get("effective_date", ""),
+            "cancel_effective": row.get("cancl_effective_date", ""),
+            "insurer":          row.get("name_company", ""),
+            "policy":           row.get("policy_no", ""),
+            "coverage":         row.get("mod_col_3", ""),
+            "cancel_method":    row.get("cancl_method", ""),
         })
 
-    # Normalize authority - confirmed fields from 9mw4-x3tu
+    # Normalize authority - confirmed field names from 9mw4-x3tu
     auth_normalized = []
     for row in authority_raw:
         auth_normalized.append({
-            "served":    row.get("orig_served_date") or row.get("disp_served_date") or "",
-            "decided":   row.get("disp_decided_date") or "",
-            "docket":    row.get("docket_number") or "",
-            "authority": row.get("mod_col_1") or row.get("op_auth_type") or "",
-            "action":    row.get("original_action_desc") or "",
+            "served":    row.get("orig_served_date", ""),
+            "decided":   row.get("disp_decided_date", ""),
+            "docket":    row.get("docket_number", ""),
+            "authority": row.get("mod_col_1", ""),
+            "action":    row.get("original_action_desc", ""),
         })
 
     return {
