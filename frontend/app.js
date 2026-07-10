@@ -32,16 +32,6 @@ function setStatus(msg, isError = false) {
   bar.className = "status-bar" + (isError ? " error" : "");
 }
 
-function switchTab(name) {
-  document.querySelectorAll(".tab-btn").forEach((b, i) => {
-    const tabs = ["inspections","crashes","insurance","authority","map"];
-    b.classList.toggle("active", tabs[i] === name);
-  });
-  document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-  document.getElementById("tab-" + name).classList.add("active");
-  if (name === "map") renderMap(currentMapData);
-}
-
 function renderCarrier(carrier) {
   const statusClass = (carrier.usdot_status||"").toLowerCase().includes("active") ? "active" : "inactive";
   const ratingVal = (carrier.safety_rating && carrier.safety_rating !== "None") ? carrier.safety_rating : "Not Rated";
