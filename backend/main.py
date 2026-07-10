@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from safer_scraper import get_carrier_by_dot
 from sms_scraper import download_sms_inspection_excel
 from excel_parser import parse_inspections, parse_crashes
-from li_scraper import get_li
+from li_scraper import get_li_data
 
 app = FastAPI(title="FMCSA Tool API")
 
@@ -46,10 +46,10 @@ async def get_inspections(dot_number: str):
 
 
 @app.get("/li/{dot_number}")
-async def get_li_data(dot_number: str):
+async def get_li(dot_number: str):
     """Fetch Insurance and Authority History from DOT Open Data Portal."""
     try:
-        data = await get_li(dot_number)
+        data = await get_li_data(dot_number)
         return {"status": "ok", **data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
