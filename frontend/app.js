@@ -1,6 +1,5 @@
 const API_BASE = "https://fmcsa-playwright.onrender.com";
 
-// State centroids (lat/lng) for bubble placement - D3 projects these
 const STATE_CENTROIDS = {
   AL:[86.9023,32.3182],AK:[153.3696,56.1326],AZ:[111.0937,34.0489],
   AR:[91.8318,34.7465],CA:[119.4179,36.7783],CO:[105.7821,39.5501],
@@ -21,7 +20,7 @@ const STATE_CENTROIDS = {
   WI:[89.6165,43.7844],WY:[107.2903,43.0760],DC:[77.0369,38.9072],
 };
 
-let currentMapData = [];
+let currentMapData = { points: [], home: null };
 let mapInitialized = false;
 let usTopoData = null;
 
@@ -30,6 +29,18 @@ function setStatus(msg, isError = false) {
   bar.textContent = msg;
   bar.style.display = msg ? "block" : "none";
   bar.className = "status-bar" + (isError ? " error" : "");
+}
+
+function switchTab(name) {
+  document.querySelectorAll(".tab-btn").forEach((b, i) => {
+    const tabs = ["inspections","crashes","insurance","authority","map"];
+    b.classList.toggle("active", tabs[i] === name);
+  });
+  document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+  document.getElementById("tab-" + name).classList.add("active");
+  if (name === "map") {
+    initMap().then(() => renderMap(currentMapData.points, currentMapData.home));
+  }
 }
 
 function renderCarrier(carrier) {
@@ -153,7 +164,6 @@ function renderAuthority(authority) {
 async function initMap() {
   if (mapInitialized) return;
   try {
-    // Load US TopoJSON from CDN
     const topo = await d3.json("https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json");
     usTopoData = topo;
     mapInitialized = true;
@@ -162,109 +172,95 @@ async function initMap() {
   }
 }
 
-function renderMap(mapData) {
-  currentMapData = mapData;
+function renderMap(points, home) {
   const container = document.getElementById("mapContainer");
   const svg = d3.select("#usMap");
   svg.selectAll("*").remove();
 
   const width = container.clientWidth || 900;
   const height = Math.round(width * 0.6);
-  svg.attr("viewBox", `0 0 ${width} ${height}`)
-     .attr("height", height);
+  svg.attr("viewBox", `0 0 ${width} ${height}`).attr("height", height);
 
   const projection = d3.geoAlbersUsa()
     .scale(width * 1.25)
     .translate([width / 2, height / 2]);
-
   const path = d3.geoPath().projection(projection);
 
-  // Draw background
-  svg.append("rect")
-    .attr("width", width).attr("height", height)
-    .attr("fill", "#eaf4fb");
+  svg.append("rect").attr("width", width).attr("height", height).attr("fill", "#eaf4fb");
 
   if (!usTopoData) {
-    svg.append("text")
-      .attr("x", width/2).attr("y", height/2)
-      .attr("text-anchor", "middle").attr("fill", "#777")
-      .text("Map data unavailable");
+    svg.append("text").attr("x", width/2).attr("y", height/2)
+      .attr("text-anchor","middle").attr("fill","#777").text("Map data unavailable");
     return;
   }
 
   const states = topojson.feature(usTopoData, usTopoData.objects.states);
-
-  // Draw states
-  svg.append("g")
-    .selectAll("path")
-    .data(states.features)
-    .join("path")
-    .attr("d", path)
-    .attr("fill", "#c8ddf0")
-    .attr("stroke", "white")
-    .attr("stroke-width", 1);
-
-  // Draw state borders
+  svg.append("g").selectAll("path").data(states.features).join("path")
+    .attr("d", path).attr("fill", "#c8ddf0").attr("stroke","white").attr("stroke-width",1);
   svg.append("path")
-    .datum(topojson.mesh(usTopoData, usTopoData.objects.states, (a, b) => a !== b))
-    .attr("d", path)
-    .attr("fill", "none")
-    .attr("stroke", "white")
-    .attr("stroke-width", 1);
+    .datum(topojson.mesh(usTopoData, usTopoData.objects.states, (a,b) => a !== b))
+    .attr("d", path).attr("fill","none").attr("stroke","white").attr("stroke-width",1);
 
-  if (!mapData || !mapData.length) return;
-
-  const maxCount = Math.max(...mapData.map(d => d.count), 1);
   const tooltip = document.getElementById("mapTooltip");
 
-  mapData.forEach(d => {
-    const centroid = STATE_CENTROIDS[d.state];
-    if (!centroid) return;
+  // Draw individual inspection points
+  if (points && points.length) {
+    points.forEach(p => {
+      const coords = projection([p.lng, p.lat]);
+      if (!coords) return;
+      const isOos = p.out_of_service === "Yes";
+      const color = isOos ? "#c0392b" : "#2980b9";
 
-    // Project [lng, lat] to SVG coords
-    const coords = projection([-centroid[0], centroid[1]]);
-    if (!coords) return;
+      const g = svg.append("g").style("cursor","pointer");
+      g.append("circle")
+        .attr("cx", coords[0]).attr("cy", coords[1])
+        .attr("r", 5)
+        .attr("fill", color)
+        .attr("opacity", 0.75)
+        .attr("stroke","white").attr("stroke-width",0.8);
 
-    const r = 8 + (d.count / maxCount) * 28;
-    const oosRatio = d.oos_count / Math.max(d.count, 1);
-    const color = oosRatio > 0.5 ? "#c0392b" : oosRatio > 0.2 ? "#e67e22" : "#2980b9";
+      g.on("mousemove", (event) => {
+        tooltip.style.display = "block";
+        tooltip.style.left = (event.clientX + 14) + "px";
+        tooltip.style.top = (event.clientY - 10) + "px";
+        tooltip.innerHTML = `
+          <b>${p.state} — ${p.inspection_date||"?"}</b><br>
+          Report: ${p.report_number||"—"}<br>
+          Level ${p.level||"?"} | ${p.basic||"No violation"}<br>
+          OOS: ${isOos ? "<span style='color:#ff8080'>Yes</span>" : "No"}
+        `;
+      }).on("mouseleave", () => { tooltip.style.display = "none"; });
+    });
+  }
 
-    const g = svg.append("g").style("cursor", "pointer");
+  // Draw carrier home marker
+  if (home) {
+    const coords = projection([home.lng, home.lat]);
+    if (coords) {
+      const g = svg.append("g").style("cursor","pointer");
 
-    g.append("circle")
-      .attr("cx", coords[0]).attr("cy", coords[1])
-      .attr("r", r)
-      .attr("fill", color)
-      .attr("opacity", 0.82)
-      .attr("stroke", "white")
-      .attr("stroke-width", 1.5);
+      // Home pin: filled circle with a white house icon outline
+      g.append("circle")
+        .attr("cx", coords[0]).attr("cy", coords[1])
+        .attr("r", 10)
+        .attr("fill", "#f39c12")
+        .attr("stroke", "white").attr("stroke-width", 2);
 
-    g.append("text")
-      .attr("x", coords[0]).attr("y", coords[1] + 4)
-      .attr("text-anchor", "middle")
-      .attr("font-size", 9).attr("fill", "white")
-      .attr("font-weight", "bold")
-      .attr("pointer-events", "none")
-      .text(d.state);
+      // "H" text label
+      g.append("text")
+        .attr("x", coords[0]).attr("y", coords[1] + 4)
+        .attr("text-anchor","middle")
+        .attr("font-size", 10).attr("font-weight","bold")
+        .attr("fill","white").attr("pointer-events","none")
+        .text("H");
 
-    g.on("mousemove", (event) => {
-      tooltip.style.display = "block";
-      tooltip.style.left = (event.clientX + 14) + "px";
-      tooltip.style.top = (event.clientY - 10) + "px";
-      tooltip.innerHTML = `<b>${d.state}</b><br>${d.count} inspection(s)<br>${d.oos_count} OOS (${Math.round(oosRatio*100)}%)`;
-    }).on("mouseleave", () => { tooltip.style.display = "none"; });
-  });
-}
-
-function switchTab(name) {
-  document.querySelectorAll(".tab-btn").forEach((b, i) => {
-    const tabs = ["inspections","crashes","insurance","authority","map"];
-    b.classList.toggle("active", tabs[i] === name);
-  });
-  document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
-  document.getElementById("tab-" + name).classList.add("active");
-  if (name === "map") {
-    initMap().then(() => renderMap(currentMapData));
+      g.on("mousemove", (event) => {
+        tooltip.style.display = "block";
+        tooltip.style.left = (event.clientX + 14) + "px";
+        tooltip.style.top = (event.clientY - 10) + "px";
+        tooltip.innerHTML = `<b>🏠 Carrier Home</b><br>${home.label||""}<br>${home.address||""}`;
+      }).on("mouseleave", () => { tooltip.style.display = "none"; });
+    }
   }
 }
 
@@ -289,7 +285,11 @@ async function fetchAll() {
     renderCrashes(data.crashes || []);
     renderInsurance(data.insurance_history || []);
     renderAuthority(data.authority_history || []);
-    currentMapData = data.inspection_map || [];
+
+    currentMapData = {
+      points: data.inspection_points || [],
+      home: data.home_location || null,
+    };
 
     document.getElementById("dataCard").classList.remove("hidden");
 

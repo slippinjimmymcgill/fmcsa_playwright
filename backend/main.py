@@ -1,10 +1,12 @@
 import asyncio
+import random
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from safer_scraper import get_carrier_by_dot
 from sms_scraper import download_sms_inspection_excel
 from excel_parser import parse_inspections, parse_crashes
 from li_scraper import get_li_data
+from geocoder import geocode_address
 
 app = FastAPI(title="FMCSA Tool API")
 
@@ -15,6 +17,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# State centroids — used as fallback lat/lng per inspection when no exact coords available
 STATE_COORDS = {
     "AL":(32.806671,-86.791130),"AK":(61.370716,-152.404419),
     "AZ":(33.729759,-111.431221),"AR":(34.969704,-92.373123),
@@ -44,8 +47,44 @@ STATE_COORDS = {
     "DC":(38.897438,-77.026817),
 }
 
+# Jitter radius in degrees (~30 miles) so same-state inspections spread out
+JITTER = 0.35
 
-def build_inspection_map_data(inspections: list[dict]) -> list[dict]:
+
+def build_inspection_points(inspections: list[dict]) -> list[dict]:
+    """
+    Build one map point per inspection with individual lat/lng.
+    Uses state centroid + small random jitter so overlapping points
+    in the same state are visually distinguishable.
+    Seed jitter by report_number for determinism across reloads.
+    """
+    points = []
+    for insp in inspections:
+        state = insp.get("state", "").upper().strip()
+        if not state or state not in STATE_COORDS:
+            continue
+        base_lat, base_lng = STATE_COORDS[state]
+        report = insp.get("report_number", "")
+        # Deterministic jitter seeded by report number
+        rng = random.Random(hash(report) if report else id(insp))
+        lat = base_lat + rng.uniform(-JITTER, JITTER)
+        lng = base_lng + rng.uniform(-JITTER, JITTER)
+        points.append({
+            "lat": round(lat, 6),
+            "lng": round(lng, 6),
+            "state": state,
+            "report_number": report,
+            "inspection_date": insp.get("inspection_date", ""),
+            "level": insp.get("level", ""),
+            "basic": insp.get("basic", ""),
+            "violation_description": insp.get("violation_description", ""),
+            "out_of_service": insp.get("out_of_service", ""),
+        })
+    return points
+
+
+# Also keep statewide summary for the bubble-size legend
+def build_state_summary(inspections: list[dict]) -> list[dict]:
     from collections import defaultdict
     state_counts = defaultdict(lambda: {"count": 0, "oos_count": 0})
     for insp in inspections:
@@ -82,13 +121,13 @@ async def get_inspections(dot_number: str):
         file_path = await download_sms_inspection_excel(dot_number)
         inspections = parse_inspections(file_path)
         crashes = parse_crashes(file_path)
-        map_data = build_inspection_map_data(inspections)
         return {
             "status": "ok",
             "dot_number": dot_number,
             "inspections": inspections,
             "crashes": crashes,
-            "inspection_map": map_data,
+            "inspection_points": build_inspection_points(inspections),
+            "inspection_map": build_state_summary(inspections),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -113,13 +152,30 @@ async def get_full(dot_number: str):
 
     warnings = []
 
+    # Geocode carrier home address
+    home_location = None
+    try:
+        address = carrier.get("physical_address", "")
+        if address:
+            coords = await geocode_address(address)
+            if coords:
+                home_location = {
+                    "lat": coords[0],
+                    "lng": coords[1],
+                    "address": address,
+                    "label": carrier.get("legal_name", "Carrier Home"),
+                }
+    except Exception as e:
+        print(f"[Geocoder] Home geocoding failed: {e}")
+
     try:
         excel_path = await download_sms_inspection_excel(dot_number)
         inspections = parse_inspections(excel_path)
         crashes = parse_crashes(excel_path)
-        map_data = build_inspection_map_data(inspections)
+        inspection_points = build_inspection_points(inspections)
+        inspection_map = build_state_summary(inspections)
     except Exception as e:
-        inspections, crashes, map_data = [], [], []
+        inspections, crashes, inspection_points, inspection_map = [], [], [], []
         warnings.append(f"SMS download failed: {e}")
 
     try:
@@ -133,9 +189,11 @@ async def get_full(dot_number: str):
     return {
         "status": "partial" if warnings else "ok",
         "carrier": carrier,
+        "home_location": home_location,
         "inspections": inspections,
         "crashes": crashes,
-        "inspection_map": map_data,
+        "inspection_points": inspection_points,
+        "inspection_map": inspection_map,
         "insurance_history": insurance_history,
         "authority_history": authority_history,
         "warnings": warnings,
