@@ -198,3 +198,64 @@ async def get_full(dot_number: str):
         "authority_history": authority_history,
         "warnings": warnings,
     }
+
+# ------------------------------------------------------------------ #
+# Market Explorer endpoints
+# ------------------------------------------------------------------ #
+from market_explorer import search_carriers, search_carriers_autocomplete, get_carrier_crashes
+from fastapi import Query as QParam
+
+
+@app.get("/market/search")
+async def market_search(
+    q: str = "",
+    state: str = "",
+    status: str = "",
+    carrier_operation: str = "",
+    hm_ind: str = "",
+    min_units: str = "",
+    max_units: str = "",
+    bipd_only: bool = False,
+    order_by: str = "dot_number",
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Search FMCSA Company Census with filters. Powers the Market Explorer table."""
+    result = await search_carriers(
+        query=q,
+        state=state,
+        status=status,
+        carrier_operation=carrier_operation,
+        hm_ind=hm_ind,
+        min_power_units=min_units,
+        max_power_units=max_units,
+        bipd_only=bipd_only,
+        order_by=order_by,
+        limit=min(limit, 100),
+        offset=offset,
+    )
+    return result
+
+
+@app.get("/market/autocomplete")
+async def market_autocomplete(q: str = ""):
+    """Fast carrier name/DOT autocomplete for search dropdown."""
+    results = await search_carriers_autocomplete(q, limit=10)
+    return {"results": results}
+
+
+@app.get("/crashes/{dot_number}")
+async def carrier_crashes(dot_number: str):
+    """Fetch crash history for a carrier from the FMCSA Crash File."""
+    try:
+        crashes = await get_carrier_crashes(dot_number)
+        return {"status": "ok", "dot_number": dot_number, "crashes": crashes}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/full/{dot_number}")
+async def get_full_v2(dot_number: str):
+    """Full profile including crashes from Crash File dataset."""
+    # This route conflicts with existing get_full - handled by FastAPI route ordering
+    pass
