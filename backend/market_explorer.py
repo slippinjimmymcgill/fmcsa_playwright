@@ -10,7 +10,7 @@ import httpx
 
 SOCRATA_BASE = "https://data.transportation.gov/resource"
 CENSUS_ID = "az4n-8mr2"
-CRASH_ID  = "mjz6-e4ab"
+CRASH_ID  = "aayw-vxb3"
 HEADERS = {"Accept": "application/json"}
 
 

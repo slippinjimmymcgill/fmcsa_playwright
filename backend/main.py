@@ -259,3 +259,30 @@ async def get_full_v2(dot_number: str):
     """Full profile including crashes from Crash File dataset."""
     # This route conflicts with existing get_full - handled by FastAPI route ordering
     pass
+
+@app.get("/debug-crash/{dot_number}")
+async def debug_crash(dot_number: str):
+    """Test crash dataset and show actual field names."""
+    import httpx
+    # Try both padded and unpadded
+    results = {}
+    padded = dot_number.zfill(8)
+    for label, where in [
+        ("unpadded", f"dot_number='{dot_number}'"),
+        ("padded",   f"dot_number='{padded}'"),
+        ("numeric",  f"dot_number={dot_number}"),
+    ]:
+        url = f"https://data.transportation.gov/resource/aayw-vxb3.json"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(url, params={"$where": where, "$limit": 3})
+                data = resp.json()
+                results[label] = {
+                    "status": resp.status_code,
+                    "count": len(data) if isinstance(data, list) else 0,
+                    "fields": list(data[0].keys()) if isinstance(data, list) and data else [],
+                    "sample": data[0] if isinstance(data, list) and data else data,
+                }
+        except Exception as e:
+            results[label] = {"error": str(e)}
+    return results
