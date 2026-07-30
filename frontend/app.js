@@ -315,18 +315,19 @@ function renderCrashes(crashes) {
   document.getElementById("crashTabCount").textContent = crashes.length;
   const tbody = document.getElementById("crashBody");
   if (!crashes.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="empty-msg">No crash records found.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="empty-msg">No crash records found.</td></tr>`;
     return;
   }
   tbody.innerHTML = crashes.map((r, i) => `<tr>
     <td>${i+1}</td>
     <td>${(r.crash_date||r.date||"—").split("T")[0]}</td>
     <td>${r.state||r.report_state||"—"}</td>
+    <td>${r.city||"—"}</td>
     <td>${r.report_number||"—"}</td>
     <td>${r.fatalities||"0"}</td><td>${r.injuries||"0"}</td>
     <td>${r.tow_away||r.tow||"—"}</td>
-    <td>${r.hm_released||r.haz_mat||"—"}</td>
-    <td>${r.not_preventable||"—"}</td>
+    <td>${r.haz_mat||"-"}</td>
+    <td style="font-size:0.76rem;max-width:200px">${r.event||"-"}</td>
   </tr>`).join("");
 }
 

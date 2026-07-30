@@ -1,4 +1,3 @@
-import asyncio
 import random
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,17 +6,11 @@ from sms_scraper import download_sms_inspection_excel
 from excel_parser import parse_inspections, parse_crashes
 from li_scraper import get_li_data
 from geocoder import geocode_address
+from market_explorer import search_carriers, search_carriers_autocomplete, get_carrier_crashes
 
 app = FastAPI(title="FMCSA Tool API")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# State centroids — used as fallback lat/lng per inspection when no exact coords available
 STATE_COORDS = {
     "AL":(32.806671,-86.791130),"AK":(61.370716,-152.404419),
     "AZ":(33.729759,-111.431221),"AR":(34.969704,-92.373123),
@@ -46,18 +39,10 @@ STATE_COORDS = {
     "WI":(44.268543,-89.616508),"WY":(42.755966,-107.302490),
     "DC":(38.897438,-77.026817),
 }
-
-# Jitter radius in degrees (~30 miles) so same-state inspections spread out
 JITTER = 0.35
 
 
-def build_inspection_points(inspections: list[dict]) -> list[dict]:
-    """
-    Build one map point per inspection with individual lat/lng.
-    Uses state centroid + small random jitter so overlapping points
-    in the same state are visually distinguishable.
-    Seed jitter by report_number for determinism across reloads.
-    """
+def build_inspection_points(inspections):
     points = []
     for insp in inspections:
         state = insp.get("state", "").upper().strip()
@@ -65,13 +50,10 @@ def build_inspection_points(inspections: list[dict]) -> list[dict]:
             continue
         base_lat, base_lng = STATE_COORDS[state]
         report = insp.get("report_number", "")
-        # Deterministic jitter seeded by report number
         rng = random.Random(hash(report) if report else id(insp))
-        lat = base_lat + rng.uniform(-JITTER, JITTER)
-        lng = base_lng + rng.uniform(-JITTER, JITTER)
         points.append({
-            "lat": round(lat, 6),
-            "lng": round(lng, 6),
+            "lat": round(base_lat + rng.uniform(-JITTER, JITTER), 6),
+            "lng": round(base_lng + rng.uniform(-JITTER, JITTER), 6),
             "state": state,
             "report_number": report,
             "inspection_date": insp.get("inspection_date", ""),
@@ -83,32 +65,24 @@ def build_inspection_points(inspections: list[dict]) -> list[dict]:
     return points
 
 
-# Also keep statewide summary for the bubble-size legend
-def build_state_summary(inspections: list[dict]) -> list[dict]:
+def build_state_summary(inspections):
     from collections import defaultdict
-    state_counts = defaultdict(lambda: {"count": 0, "oos_count": 0})
+    counts = defaultdict(lambda: {"count": 0, "oos_count": 0})
     for insp in inspections:
         state = insp.get("state", "").upper().strip()
         if not state or state not in STATE_COORDS:
             continue
-        state_counts[state]["count"] += 1
+        counts[state]["count"] += 1
         if insp.get("out_of_service", "").lower() == "yes":
-            state_counts[state]["oos_count"] += 1
-    result = []
-    for state, data in state_counts.items():
-        lat, lng = STATE_COORDS[state]
-        result.append({
-            "state": state, "lat": lat, "lng": lng,
-            "count": data["count"], "oos_count": data["oos_count"],
-        })
-    return result
+            counts[state]["oos_count"] += 1
+    return [{"state": s, "lat": STATE_COORDS[s][0], "lng": STATE_COORDS[s][1],
+             "count": d["count"], "oos_count": d["oos_count"]} for s, d in counts.items()]
 
 
 @app.get("/carrier/{dot_number}")
 async def get_carrier(dot_number: str):
     try:
-        carrier = await get_carrier_by_dot(dot_number)
-        return {"status": "ok", "carrier": carrier}
+        return {"status": "ok", "carrier": await get_carrier_by_dot(dot_number)}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -118,17 +92,13 @@ async def get_carrier(dot_number: str):
 @app.get("/inspections/{dot_number}")
 async def get_inspections(dot_number: str):
     try:
-        file_path = await download_sms_inspection_excel(dot_number)
-        inspections = parse_inspections(file_path)
-        crashes = parse_crashes(file_path)
-        return {
-            "status": "ok",
-            "dot_number": dot_number,
-            "inspections": inspections,
-            "crashes": crashes,
-            "inspection_points": build_inspection_points(inspections),
-            "inspection_map": build_state_summary(inspections),
-        }
+        fp = await download_sms_inspection_excel(dot_number)
+        inspections = parse_inspections(fp)
+        crashes = parse_crashes(fp)
+        return {"status": "ok", "dot_number": dot_number,
+                "inspections": inspections, "crashes": crashes,
+                "inspection_points": build_inspection_points(inspections),
+                "inspection_map": build_state_summary(inspections)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -136,15 +106,22 @@ async def get_inspections(dot_number: str):
 @app.get("/li/{dot_number}")
 async def get_li(dot_number: str):
     try:
-        data = await get_li_data(dot_number)
-        return {"status": "ok", **data}
+        return {"status": "ok", **(await get_li_data(dot_number))}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/crashes/{dot_number}")
+async def carrier_crashes(dot_number: str):
+    try:
+        crashes = await get_carrier_crashes(dot_number)
+        return {"status": "ok", "dot_number": dot_number, "crashes": crashes}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/full/{dot_number}")
 async def get_full(dot_number: str):
-    """Combined: carrier + inspections + crashes + insurance + authority + map."""
     try:
         carrier = await get_carrier_by_dot(dot_number)
     except ValueError as e:
@@ -152,39 +129,46 @@ async def get_full(dot_number: str):
 
     warnings = []
 
-    # Geocode carrier home address
+    # Geocode carrier home
     home_location = None
     try:
         address = carrier.get("physical_address", "")
         if address:
             coords = await geocode_address(address)
             if coords:
-                home_location = {
-                    "lat": coords[0],
-                    "lng": coords[1],
-                    "address": address,
-                    "label": carrier.get("legal_name", "Carrier Home"),
-                }
+                home_location = {"lat": coords[0], "lng": coords[1],
+                                 "address": address, "label": carrier.get("legal_name", "")}
     except Exception as e:
-        print(f"[Geocoder] Home geocoding failed: {e}")
+        print(f"[Geocoder] {e}")
 
+    # SMS inspections + crashes
+    inspections, sms_crashes, inspection_points, inspection_map = [], [], [], []
     try:
-        excel_path = await download_sms_inspection_excel(dot_number)
-        inspections = parse_inspections(excel_path)
-        crashes = parse_crashes(excel_path)
+        fp = await download_sms_inspection_excel(dot_number)
+        inspections = parse_inspections(fp)
+        sms_crashes = parse_crashes(fp)
         inspection_points = build_inspection_points(inspections)
         inspection_map = build_state_summary(inspections)
     except Exception as e:
-        inspections, crashes, inspection_points, inspection_map = [], [], [], []
         warnings.append(f"SMS download failed: {e}")
 
+    # Crash File (more detailed than SMS Excel)
+    crashes = sms_crashes
     try:
-        li_data = await get_li_data(dot_number)
-        insurance_history = li_data.get("insurance_history", [])
-        authority_history = li_data.get("authority_history", [])
+        cf_crashes = await get_carrier_crashes(dot_number)
+        if cf_crashes:
+            crashes = cf_crashes
     except Exception as e:
-        insurance_history, authority_history = [], []
-        warnings.append(f"L&I data fetch failed: {e}")
+        warnings.append(f"Crash File fetch failed: {e}")
+
+    # Insurance + Authority
+    insurance_history, authority_history = [], []
+    try:
+        li = await get_li_data(dot_number)
+        insurance_history = li.get("insurance_history", [])
+        authority_history = li.get("authority_history", [])
+    except Exception as e:
+        warnings.append(f"L&I fetch failed: {e}")
 
     return {
         "status": "partial" if warnings else "ok",
@@ -199,90 +183,19 @@ async def get_full(dot_number: str):
         "warnings": warnings,
     }
 
-# ------------------------------------------------------------------ #
-# Market Explorer endpoints
-# ------------------------------------------------------------------ #
-from market_explorer import search_carriers, search_carriers_autocomplete, get_carrier_crashes
-from fastapi import Query as QParam
-
 
 @app.get("/market/search")
-async def market_search(
-    q: str = "",
-    state: str = "",
-    status: str = "",
-    carrier_operation: str = "",
-    hm_ind: str = "",
-    min_units: str = "",
-    max_units: str = "",
-    bipd_only: bool = False,
-    order_by: str = "dot_number",
-    limit: int = 50,
-    offset: int = 0,
-):
-    """Search FMCSA Company Census with filters. Powers the Market Explorer table."""
-    result = await search_carriers(
-        query=q,
-        state=state,
-        status=status,
-        carrier_operation=carrier_operation,
-        hm_ind=hm_ind,
-        min_power_units=min_units,
-        max_power_units=max_units,
-        bipd_only=bipd_only,
-        order_by=order_by,
-        limit=min(limit, 100),
-        offset=offset,
-    )
-    return result
+async def market_search(q: str = "", state: str = "", status: str = "",
+                        carrier_operation: str = "", hm_ind: str = "",
+                        min_units: str = "", max_units: str = "",
+                        bipd_only: bool = False, order_by: str = "dot_number",
+                        limit: int = 50, offset: int = 0):
+    return await search_carriers(
+        query=q, state=state, status=status, carrier_operation=carrier_operation,
+        hm_ind=hm_ind, min_power_units=min_units, max_power_units=max_units,
+        bipd_only=bipd_only, order_by=order_by, limit=min(limit, 100), offset=offset)
 
 
 @app.get("/market/autocomplete")
 async def market_autocomplete(q: str = ""):
-    """Fast carrier name/DOT autocomplete for search dropdown."""
-    results = await search_carriers_autocomplete(q, limit=10)
-    return {"results": results}
-
-
-@app.get("/crashes/{dot_number}")
-async def carrier_crashes(dot_number: str):
-    """Fetch crash history for a carrier from the FMCSA Crash File."""
-    try:
-        crashes = await get_carrier_crashes(dot_number)
-        return {"status": "ok", "dot_number": dot_number, "crashes": crashes}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/full/{dot_number}")
-async def get_full_v2(dot_number: str):
-    """Full profile including crashes from Crash File dataset."""
-    # This route conflicts with existing get_full - handled by FastAPI route ordering
-    pass
-
-@app.get("/debug-crash/{dot_number}")
-async def debug_crash(dot_number: str):
-    """Test crash dataset and show actual field names."""
-    import httpx
-    # Try both padded and unpadded
-    results = {}
-    padded = dot_number.zfill(8)
-    for label, where in [
-        ("unpadded", f"dot_number='{dot_number}'"),
-        ("padded",   f"dot_number='{padded}'"),
-        ("numeric",  f"dot_number={dot_number}"),
-    ]:
-        url = f"https://data.transportation.gov/resource/aayw-vxb3.json"
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(url, params={"$where": where, "$limit": 3})
-                data = resp.json()
-                results[label] = {
-                    "status": resp.status_code,
-                    "count": len(data) if isinstance(data, list) else 0,
-                    "fields": list(data[0].keys()) if isinstance(data, list) and data else [],
-                    "sample": data[0] if isinstance(data, list) and data else data,
-                }
-        except Exception as e:
-            results[label] = {"error": str(e)}
-    return results
+    return {"results": await search_carriers_autocomplete(q, limit=10)}

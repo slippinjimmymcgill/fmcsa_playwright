@@ -138,20 +138,27 @@ async def search_carriers_autocomplete(query: str, limit: int = 10) -> list[dict
 async def get_carrier_crashes(dot_number: str, limit: int = 100) -> list[dict]:
     params = {
         "$where": f"dot_number='{dot_number}'",
-        "$order": "acc_date DESC",
+        "$order": "report_date DESC",
     }
     rows = await _get(CRASH_ID, params, limit=limit)
     crashes = []
     for r in rows:
+        # Convert report_date from YYYYMMDD to YYYY-MM-DD
+        raw_date = r.get("report_date", "")
+        if raw_date and len(raw_date) == 8:
+            raw_date = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
         crashes.append({
             "report_number":   r.get("report_number", ""),
-            "date":            r.get("acc_date", ""),
-            "state":           r.get("report_state", ""),
+            "date":            raw_date,
+            "state":           r.get("report_state", r.get("state", "")),
             "fatalities":      r.get("fatalities", "0"),
             "injuries":        r.get("injuries", "0"),
-            "tow":             r.get("tow", ""),
-            "haz_mat":         r.get("haz_mat_released", ""),
-            "not_preventable": r.get("not_preventable", ""),
-            "weather":         r.get("weather_cond_desc", ""),
+            "tow_away":        r.get("tow_away", ""),
+            "haz_mat":         r.get("hazmat_released", r.get("vehicle_hazmat_placard", "")),
+            "not_preventable": r.get("federal_recordable", ""),
+            "location":        r.get("location", ""),
+            "city":            r.get("city", ""),
+            "carrier_name":    r.get("crash_carrier_name", ""),
+            "event":           r.get("crash_event_seq_id_desc", ""),
         })
     return crashes
