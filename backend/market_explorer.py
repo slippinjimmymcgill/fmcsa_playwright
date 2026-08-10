@@ -110,12 +110,14 @@ async def search_carriers(
 
 
 async def search_carriers_autocomplete(query: str, limit: int = 10) -> list[dict]:
-    if not query or len(query) < 2:
+    if not query or len(query) < 1:
         return []
     q = query.strip().replace("'", "''")
     if q.isdigit():
-        where = f"dot_number='{int(q)}'"
+        # Prefix match: DOT numbers that START WITH the typed digits
+        where = f"starts_with(dot_number, '{q}')"
     else:
+        # Prefix match: carrier names that START WITH the typed string
         where = f"upper(legal_name) like upper('{q}%')"
     params = {
         "$where": where,

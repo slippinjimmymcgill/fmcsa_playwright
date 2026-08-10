@@ -119,7 +119,7 @@ function openCarrierProfile(dot) {
 function onQueryInput() {
   clearTimeout(acTimer);
   const q = document.getElementById("mktQuery").value.trim();
-  if (q.length < 2) {
+  if (q.length < 1) {
     document.getElementById("acDropdown").classList.add("hidden");
     return;
   }
@@ -127,7 +127,7 @@ function onQueryInput() {
     document.getElementById("mktQuery").value = dot;
     document.getElementById("acDropdown").classList.add("hidden");
     doSearch(0);
-  }), 280);
+  }), 200);
 }
 
 function onQueryKey(e) {
@@ -191,7 +191,7 @@ function onProfileInput() {
     document.getElementById("profileDotInput").value = dot;
     document.getElementById("profileAcDropdown").classList.add("hidden");
     loadProfile();
-  }), 280);
+  }), 200);
 }
 
 function onProfileKey(e) {
