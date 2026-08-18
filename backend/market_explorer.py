@@ -112,30 +112,38 @@ async def search_carriers(
 async def search_carriers_autocomplete(query: str, limit: int = 10) -> list[dict]:
     if not query or len(query) < 1:
         return []
-    q = query.strip()
+    q = query.strip().replace("'", "''")
+    is_numeric = q.isdigit()
+
+    if is_numeric:
+        # For DOT number prefix, use a numeric range query which is index-friendly.
+        # e.g. typing "357" → DOT >= 357000000 AND DOT < 358000000
+        # This works because dot_number is stored as a number in the census dataset.
+        prefix_len = len(q)
+        low  = int(q) * (10 ** (8 - prefix_len))  # pad right with zeros
+        high = low + (10 ** (8 - prefix_len))      # next prefix block
+        # Also handle shorter DOT numbers (most are 7 digits)
+        low7  = int(q) * (10 ** (7 - prefix_len)) if prefix_len <= 7 else None
+        high7 = (low7 + (10 ** (7 - prefix_len))) if low7 is not None else None
+
+        if low7 is not None and low7 > 0:
+            where = (
+                f"(dot_number >= {low} AND dot_number < {high})"
+                f" OR (dot_number >= {low7} AND dot_number < {high7})"
+            )
+        else:
+            where = f"dot_number >= {low} AND dot_number < {high}"
+    else:
+        # For name prefix, LIKE 'X%' on an indexed text column is fast.
+        # Socrata indexes legal_name for the Company Census dataset.
+        where = f"upper(legal_name) like upper('{q}%')"
 
     params = {
-        "$q": q,
+        "$where": where,
         "$select": "dot_number,legal_name,dba_name,phy_city,phy_state,status_code",
-        "$limit": 50,
-        "$order": "legal_name ASC",
+        "$order": "dot_number ASC" if is_numeric else "legal_name ASC",
     }
-    rows = await _get(CENSUS_ID, params, limit=50)
-
-    q_upper = q.upper()
-    is_numeric = q.isdigit()
-    results = []
-    for r in rows:
-        dot = str(r.get("dot_number", ""))
-        name = r.get("legal_name", "").upper()
-        if is_numeric:
-            if dot.startswith(q):
-                results.append(r)
-        else:
-            if name.startswith(q_upper):
-                results.append(r)
-        if len(results) >= limit:
-            break
+    rows = await _get(CENSUS_ID, params, limit=limit)
 
     return [
         {
@@ -145,7 +153,7 @@ async def search_carriers_autocomplete(query: str, limit: int = 10) -> list[dict
             "location":   f"{r.get('phy_city','')}, {r.get('phy_state','')}".strip(", "),
             "status":     r.get("status_code", ""),
         }
-        for r in results
+        for r in rows
     ]
 
 
