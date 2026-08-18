@@ -110,19 +110,33 @@ async def search_carriers(
 
 
 async def search_carriers_autocomplete(query: str, limit: int = 10) -> list[dict]:
-    if not query or len(query) < 2:
+    if not query or len(query) < 1:
         return []
-    q = query.strip().replace("'", "''")
-    if q.isdigit():
-        where = f"dot_number='{int(q)}'"
-    else:
-        where = f"upper(legal_name) like upper('{q}%')"
+    q = query.strip()
+
     params = {
-        "$where": where,
+        "$q": q,
         "$select": "dot_number,legal_name,dba_name,phy_city,phy_state,status_code",
+        "$limit": 50,
         "$order": "legal_name ASC",
     }
-    rows = await _get(CENSUS_ID, params, limit=limit)
+    rows = await _get(CENSUS_ID, params, limit=50)
+
+    q_upper = q.upper()
+    is_numeric = q.isdigit()
+    results = []
+    for r in rows:
+        dot = str(r.get("dot_number", ""))
+        name = r.get("legal_name", "").upper()
+        if is_numeric:
+            if dot.startswith(q):
+                results.append(r)
+        else:
+            if name.startswith(q_upper):
+                results.append(r)
+        if len(results) >= limit:
+            break
+
     return [
         {
             "dot_number": str(r.get("dot_number", "")),
@@ -131,7 +145,7 @@ async def search_carriers_autocomplete(query: str, limit: int = 10) -> list[dict
             "location":   f"{r.get('phy_city','')}, {r.get('phy_state','')}".strip(", "),
             "status":     r.get("status_code", ""),
         }
-        for r in rows
+        for r in results
     ]
 
 

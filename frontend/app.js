@@ -127,7 +127,7 @@ function onQueryInput() {
     document.getElementById("mktQuery").value = dot;
     document.getElementById("acDropdown").classList.add("hidden");
     doSearch(0);
-  }), 280);
+  }), 350);
 }
 
 function onQueryKey(e) {
@@ -191,7 +191,7 @@ function onProfileInput() {
     document.getElementById("profileDotInput").value = dot;
     document.getElementById("profileAcDropdown").classList.add("hidden");
     loadProfile();
-  }), 280);
+  }), 350);
 }
 
 function onProfileKey(e) {
