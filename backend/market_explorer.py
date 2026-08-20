@@ -4,6 +4,12 @@ Market Explorer - queries the FMCSA Company Census File and Crash File.
 Dataset IDs:
   az4n-8mr2 - Company Census File (4M+ carriers)
   mjz6-e4ab - FMCSA Crash File
+  6eyk-hxee - Carrier All With History (L&I). This is the ONLY dataset that
+              actually has bipd_file / cargo_file / bond_file. The Company
+              Census File has no BIPD column at all, which is why the BIPD
+              filter/column was always empty -- see _get_bipd_map() below.
+              dot_number on this dataset is a zero-padded 8-digit string
+              (e.g. "02217388"), unlike the Census File where it's numeric.
 """
 
 import httpx
@@ -11,6 +17,7 @@ import httpx
 SOCRATA_BASE = "https://data.transportation.gov/resource"
 CENSUS_ID = "az4n-8mr2"
 CRASH_ID  = "aayw-vxb3"
+LI_CARRIER_ID = "6eyk-hxee"
 HEADERS = {"Accept": "application/json"}
 
 
@@ -27,6 +34,47 @@ async def _get(dataset_id: str, params: dict, limit: int = 50) -> list[dict]:
     except Exception as e:
         print(f"[Market] {dataset_id} failed: {e}")
     return []
+
+
+def _pad_dot(dot_number: str) -> str:
+    return str(dot_number).strip().zfill(8)
+
+
+def _unpad_dot(padded: str) -> str:
+    try:
+        return str(int(padded))
+    except (TypeError, ValueError):
+        return str(padded).lstrip("0") or "0"
+
+
+async def _get_bipd_map(dot_numbers: list[str]) -> dict[str, str]:
+    """
+    Look up live BIPD-filing status ('Y'/'N') for a batch of carriers from
+    the Carrier-All-With-History dataset (6eyk-hxee), joined by dot_number.
+
+    Returns {unpadded_dot_number: bipd_file} so callers can match it
+    directly against Company Census File rows (which use numeric,
+    unpadded dot_number).
+    """
+    dot_numbers = sorted({str(d) for d in dot_numbers if d})
+    if not dot_numbers:
+        return {}
+
+    result: dict[str, str] = {}
+    # Socrata handles a few hundred values in an IN() clause fine; chunk
+    # defensively in case a caller ever passes a very large batch.
+    for i in range(0, len(dot_numbers), 200):
+        chunk = dot_numbers[i:i + 200]
+        in_list = ",".join(f"'{_pad_dot(d)}'" for d in chunk)
+        params = {
+            "$where": f"dot_number in ({in_list})",
+            "$select": "dot_number,bipd_file",
+        }
+        rows = await _get(LI_CARRIER_ID, params, limit=len(chunk))
+        for r in rows:
+            key = _unpad_dot(r.get("dot_number", ""))
+            result[key] = r.get("bipd_file", "")
+    return result
 
 
 async def search_carriers(
@@ -61,8 +109,12 @@ async def search_carriers(
         clauses.append(f"power_units >= '{min_power_units}'")
     if max_power_units:
         clauses.append(f"power_units <= '{max_power_units}'")
-    if bipd_only:
-        clauses.append("bipd_file='Y'")
+    # NOTE: bipd_file is NOT a column on the Company Census File (az4n-8mr2).
+    # It only exists on the separate Carrier-All-With-History dataset
+    # (6eyk-hxee), keyed by dot_number. It can't be added to this $where
+    # clause -- doing so used to silently make Socrata error out (which is
+    # why the filter/column showed nothing for every carrier). It's handled
+    # below instead, via a join on dot_number.
 
     where = " AND ".join(clauses) if clauses else None
     order_map = {
@@ -71,24 +123,34 @@ async def search_carriers(
         "power_units_desc": "power_units DESC",
         "mcs150_date": "mcs150_date DESC",
     }
-
-    params = {"$offset": offset, "$order": order_map.get(order_by, "dot_number ASC")}
+    base_params = {"$order": order_map.get(order_by, "dot_number ASC")}
     if where:
-        params["$where"] = where
+        base_params["$where"] = where
 
-    rows = await _get(CENSUS_ID, params, limit=limit)
+    total_is_estimate = False
 
-    # Count
-    count_params = {"$select": "count(*) as cnt"}
-    if where:
-        count_params["$where"] = where
-    count_rows = await _get(CENSUS_ID, count_params, limit=1)
-    total = int(count_rows[0]["cnt"]) if count_rows and "cnt" in count_rows[0] else len(rows)
+    if not bipd_only:
+        params = {**base_params, "$offset": offset}
+        rows = await _get(CENSUS_ID, params, limit=limit)
+
+        count_params = {"$select": "count(*) as cnt"}
+        if where:
+            count_params["$where"] = where
+        count_rows = await _get(CENSUS_ID, count_params, limit=1)
+        total = int(count_rows[0]["cnt"]) if count_rows and "cnt" in count_rows[0] else len(rows)
+    else:
+        rows, total, total_is_estimate = await _search_with_bipd_filter(base_params, limit, offset)
+
+    # Enrich this page with live BIPD-filing status, joined by dot_number.
+    # This is what actually populates the "BIPD Filing" column -- the
+    # census rows themselves never carry this field.
+    bipd_map = await _get_bipd_map([str(r.get("dot_number", "")) for r in rows])
 
     carriers = []
     for r in rows:
+        dot = str(r.get("dot_number", ""))
         carriers.append({
-            "dot_number":        str(r.get("dot_number", "")),
+            "dot_number":        dot,
             "legal_name":        r.get("legal_name", ""),
             "dba_name":          r.get("dba_name", ""),
             "status":            r.get("status_code", ""),
@@ -102,11 +164,71 @@ async def search_carriers(
             "total_drivers":     r.get("total_drivers", ""),
             "hm_ind":            r.get("hm_ind", ""),
             "mcs150_date":       r.get("mcs150_date", ""),
-            "bipd_file":         r.get("bipd_file", ""),
+            "bipd_file":         bipd_map.get(dot, ""),
             "fleetsize":         r.get("fleetsize", ""),
         })
 
-    return {"total": total, "carriers": carriers, "offset": offset, "limit": limit}
+    result = {"total": total, "carriers": carriers, "offset": offset, "limit": limit}
+    if total_is_estimate:
+        # We hit the scan cap before confirming there's nothing more; "total"
+        # is a lower bound, not an exact count. See _search_with_bipd_filter.
+        result["total_is_estimate"] = True
+    return result
+
+
+async def _search_with_bipd_filter(
+    base_params: dict, limit: int, offset: int, max_scan_batches: int = 10
+) -> tuple[list[dict], int, bool]:
+    """
+    Applies the "Active BIPD filing" filter on top of whatever else the
+    person filtered by.
+
+    Socrata can't join across datasets, and bipd_file only exists on
+    6eyk-hxee while every other Market Explorer filter (state, status,
+    operation, power units, hazmat, etc.) only exists on the census file
+    (az4n-8mr2). So instead of one $where clause, we page through the
+    census results that already match everything else, check each batch's
+    BIPD status via a join query, and keep scanning until we've collected
+    enough matches to fill the requested page (offset + limit).
+
+    This makes results correct, but it means:
+      - Requests are slower than a plain filter (multiple round trips).
+      - If a very narrow combination of filters has few/no BIPD matches
+        within max_scan_batches, we stop early and report an estimated
+        (lower-bound) total rather than scanning millions of rows.
+
+    The proper long-term fix is to ingest 6eyk-hxee into a local database
+    alongside the census file (the project already has an ETL pipeline for
+    SMS files) so this can become a real SQL join instead of a live-API
+    scan -- worth doing if BIPD filtering gets heavy use.
+    """
+    batch_size = max(limit * 4, 200)
+    scan_offset = 0
+    collected: list[dict] = []
+    exhausted = False
+
+    for _ in range(max_scan_batches):
+        batch = await _get(CENSUS_ID, {**base_params, "$offset": scan_offset}, limit=batch_size)
+        if not batch:
+            exhausted = True
+            break
+        scan_offset += len(batch)
+
+        bipd_map = await _get_bipd_map([str(r.get("dot_number", "")) for r in batch])
+        collected.extend(
+            r for r in batch if bipd_map.get(str(r.get("dot_number", ""))) == "Y"
+        )
+
+        if len(batch) < batch_size:
+            exhausted = True  # ran out of census rows matching the other filters
+            break
+        if len(collected) >= offset + limit:
+            break
+
+    page = collected[offset: offset + limit]
+    total = len(collected)
+    total_is_estimate = not exhausted and len(collected) < offset + limit
+    return page, total, total_is_estimate
 
 
 async def search_carriers_autocomplete(query: str, limit: int = 10) -> list[dict]:
