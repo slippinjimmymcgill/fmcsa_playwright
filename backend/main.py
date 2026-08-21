@@ -207,3 +207,16 @@ async def debug_census(dot_number: str):
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(url, params={"$where": f"dot_number={dot_number}", "$limit": 1})
         return resp.json()
+
+@app.get("/debug-li/{dot_number}")
+async def debug_li(dot_number: str):
+    import httpx
+    padded = str(dot_number).strip().zfill(8)
+    url = "https://data.transportation.gov/resource/6eyk-hxee.json"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(url, params={"$where": f"dot_number='{padded}'", "$limit": 5})
+        return {
+            "queried_padded_dot": padded,
+            "http_status": resp.status_code,
+            "body": resp.json() if resp.status_code == 200 else resp.text,
+        }
