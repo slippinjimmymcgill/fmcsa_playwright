@@ -199,3 +199,11 @@ async def market_search(q: str = "", state: str = "", status: str = "",
 @app.get("/market/autocomplete")
 async def market_autocomplete(q: str = ""):
     return {"results": await search_carriers_autocomplete(q, limit=10)}
+
+@app.get("/debug-census/{dot_number}")
+async def debug_census(dot_number: str):
+    import httpx
+    url = f"https://data.transportation.gov/resource/az4n-8mr2.json"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(url, params={"$where": f"dot_number={dot_number}", "$limit": 1})
+        return resp.json()
