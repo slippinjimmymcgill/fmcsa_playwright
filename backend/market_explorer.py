@@ -5,11 +5,20 @@ Dataset IDs:
   az4n-8mr2 - Company Census File (4M+ carriers)
   mjz6-e4ab - FMCSA Crash File
   6eyk-hxee - Carrier All With History (L&I). This is the ONLY dataset that
-              actually has bipd_file / cargo_file / bond_file. The Company
-              Census File has no BIPD column at all, which is why the BIPD
-              filter/column was always empty -- see _get_bipd_map() below.
-              dot_number on this dataset is a zero-padded 8-digit string
-              (e.g. "02217388"), unlike the Census File where it's numeric.
+              has BIPD data -- the Company Census File has no BIPD column at
+              all. dot_number on this dataset is a zero-padded 8-digit
+              string (e.g. "02217388"), unlike the Census File where it's
+              numeric, hence the pad/unpad helpers below.
+
+              IMPORTANT: bipd_file is NOT a "Y"/"N" flag. It holds the filed
+              coverage amount in thousands of dollars as a zero-padded
+              string (e.g. "00750" = $750,000), matching min_cov_amount.
+              A carrier has an active BIPD filing iff this parses to a
+              number > 0. (cargo_file/bond_file on this same dataset ARE
+              genuine "Y"/"N" strings -- only bipd_file is amount-encoded,
+              confirmed against live data for DOT 3576562.) Treating it as
+              "Y"/"N" was the actual bug: the value was being fetched
+              correctly the whole time, just never matched.
 """
 
 import httpx
@@ -47,12 +56,28 @@ def _unpad_dot(padded: str) -> str:
         return str(padded).lstrip("0") or "0"
 
 
-async def _get_bipd_map(dot_numbers: list[str]) -> dict[str, str]:
-    """
-    Look up live BIPD-filing status ('Y'/'N') for a batch of carriers from
-    the Carrier-All-With-History dataset (6eyk-hxee), joined by dot_number.
+def _has_active_bipd(raw) -> bool:
+    """bipd_file is a zero-padded dollar-amount string (e.g. '00750'), not
+    'Y'/'N'. A filing is active iff it parses to a positive number. Falls
+    back to treating a literal 'Y' as active too, just in case some rows
+    ever do use that encoding."""
+    if raw is None:
+        return False
+    s = str(raw).strip()
+    if not s:
+        return False
+    try:
+        return float(s) > 0
+    except ValueError:
+        return s.upper() == "Y"
 
-    Returns {unpadded_dot_number: bipd_file} so callers can match it
+
+async def _get_bipd_map(dot_numbers: list[str]) -> dict[str, bool]:
+    """
+    Look up live BIPD-filing status for a batch of carriers from the
+    Carrier-All-With-History dataset (6eyk-hxee), joined by dot_number.
+
+    Returns {unpadded_dot_number: is_active_bool} so callers can match it
     directly against Company Census File rows (which use numeric,
     unpadded dot_number).
     """
@@ -60,7 +85,7 @@ async def _get_bipd_map(dot_numbers: list[str]) -> dict[str, str]:
     if not dot_numbers:
         return {}
 
-    result: dict[str, str] = {}
+    result: dict[str, bool] = {}
     # Socrata handles a few hundred values in an IN() clause fine; chunk
     # defensively in case a caller ever passes a very large batch.
     for i in range(0, len(dot_numbers), 200):
@@ -73,7 +98,7 @@ async def _get_bipd_map(dot_numbers: list[str]) -> dict[str, str]:
         rows = await _get(LI_CARRIER_ID, params, limit=len(chunk))
         for r in rows:
             key = _unpad_dot(r.get("dot_number", ""))
-            result[key] = r.get("bipd_file", "")
+            result[key] = _has_active_bipd(r.get("bipd_file", ""))
     return result
 
 
@@ -164,7 +189,7 @@ async def search_carriers(
             "total_drivers":     r.get("total_drivers", ""),
             "hm_ind":            r.get("hm_ind", ""),
             "mcs150_date":       r.get("mcs150_date", ""),
-            "bipd_file":         bipd_map.get(dot, ""),
+            "bipd_file":         "Y" if bipd_map.get(dot, False) else "",
             "fleetsize":         r.get("fleetsize", ""),
         })
 
@@ -216,7 +241,7 @@ async def _search_with_bipd_filter(
 
         bipd_map = await _get_bipd_map([str(r.get("dot_number", "")) for r in batch])
         collected.extend(
-            r for r in batch if bipd_map.get(str(r.get("dot_number", ""))) == "Y"
+            r for r in batch if bipd_map.get(str(r.get("dot_number", "")), False)
         )
 
         if len(batch) < batch_size:
